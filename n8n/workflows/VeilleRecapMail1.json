@@ -1,0 +1,449 @@
+{
+  "id": "VeilleRecapMail1",
+  "name": "Veille · 6 · E-mail récapitulatif",
+  "description": "Envoie à une liste de destinataires un e-mail complet : fiches, posts LinkedIn, articles de prospection, carrousels PDF en pièces jointes, écartées et erreurs.",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 6 · E-mail récapitulatif\n**Quand ?** en fin de lot (si `notifications.email.actif` = `true`), via le bouton « Envoyer le récapitulatif » de l'interface, ou à la main.\n\n**Contenu** : pour chaque contenu à valider → fiche de valorisation, post LinkedIn, article d'e-mail, diapositives + **PDF en pièce jointe** ; puis les publications écartées et les erreurs.\n\n**Réglages** : destinataires / expéditeur dans `config/veille.json` (section `notifications.email`), serveur SMTP dans `.env` puis `make up`.",
+        "width": 640,
+        "height": 330,
+        "color": 7
+      },
+      "id": "ca2a166e-8368-59f3-8b9f-a1f7fa2639d8",
+      "name": "Note 0",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -440
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "4642b07b-5641-5236-93d8-56c197bc46bc",
+      "name": "Entrée",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        -60
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "e7e6120c-2ee5-568c-8078-a5668a417ca7",
+      "name": "Lancement manuel",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "/home/node/.n8n-files/config/veille.json",
+        "options": {}
+      },
+      "id": "4df41861-78ab-5ba8-a9a0-dbd31dcdeeb3",
+      "name": "Fichier de configuration",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        220,
+        30
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "fromJson",
+        "destinationKey": "config",
+        "options": {}
+      },
+      "id": "3f85bae2-8459-5e57-a337-995bf61705e7",
+      "name": "Lire la configuration",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        440,
+        30
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Qui reçoit le récapitulatif, et faut-il l'envoyer ?\n//  - fin de lot (mode « lot ») : seulement si notifications.email.actif = true ;\n//  - bouton de l'interface ou lancement manuel : toujours (s'il y a des destinataires).\nconst config = $('Lire la configuration').first().json.config;\nconst mail = config.notifications?.email || {};\nlet input = {};\ntry { if ($('Entrée').isExecuted) input = $('Entrée').first().json; } catch (e) { /* lancement manuel */ }\n\nconst to = [].concat(mail.destinataires || [])\n  .flatMap(v => String(v).split(/[,;\\s]+/))\n  .map(v => v.trim())\n  .filter(v => /^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(v));\nconst automatique = input.mode === 'lot';\n\nif (!automatique || mail.actif === true) {\n  if (!to.length) throw new Error('Récapitulatif e-mail : aucun destinataire valide dans « notifications.email.destinataires » (config/veille.json).');\n  if (!mail.expediteur) throw new Error('Récapitulatif e-mail : renseignez « notifications.email.expediteur » (config/veille.json).');\n}\n\nconst ids = Array.isArray(input.ids) ? input.ids.map(Number).filter(Number.isInteger) : null;\nreturn [{\n  json: {\n    envoyer: to.length > 0 && (!automatique || mail.actif === true),\n    automatique,\n    to: to.join(', '),\n    from: mail.expediteur || '',\n    ids: ids ? `{${ids.join(',')}}` : null,\n    joindre_pdf: mail.joindre_pdf !== false,\n    // « rien de nouveau » : seulement après la collecte hebdomadaire ou sur demande (pas au lot quotidien)\n    envoyer_si_vide: mail.envoyer_si_vide === true && (!automatique || input.apres_collecte === true),\n  },\n}];\n"
+      },
+      "id": "942b717f-7284-5429-933c-c6c0ede7bae8",
+      "name": "Paramètres e-mail",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        30
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d1df76d0-8e1c-57e7-90fd-b71dd7b518f2",
+              "leftValue": "={{ $json.envoyer }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "bcb62428-906c-5ea2-afd1-4af0c0571ff0",
+      "name": "Envoi activé ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        30
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH cible AS (\n  SELECT * FROM publications\n  WHERE CASE WHEN $1::bigint[] IS NULL THEN status = 'to_review' ELSE id = ANY($1::bigint[]) END\n)\nSELECT\n  (SELECT coalesce(jsonb_agg(to_jsonb(c) - 'raw' - 'abstract' ORDER BY c.score DESC NULLS LAST, c.id), '[]'::jsonb)\n     FROM cible c WHERE c.status = 'to_review') AS a_valider,\n  (SELECT coalesce(jsonb_agg(jsonb_build_object('id', id, 'title', title, 'labs', labs, 'score', score,\n       'raison', triage->>'raison', 'url', url) ORDER BY score DESC NULLS LAST), '[]'::jsonb)\n     FROM cible WHERE status = 'triaged_out') AS ecartees,\n  (SELECT coalesce(jsonb_agg(jsonb_build_object('id', id, 'title', title, 'erreur', last_error, 'tentatives', attempts)), '[]'::jsonb)\n     FROM cible WHERE status = 'error') AS erreurs,\n  (SELECT to_jsonb(r) FROM collect_runs r ORDER BY id DESC LIMIT 1) AS derniere_collecte,\n  (SELECT count(*)::int FROM publications WHERE status = 'approved') AS validees_en_attente",
+        "options": {
+          "queryReplacement": "={{ [ $json.ids ] }}"
+        }
+      },
+      "id": "0453365e-bb8a-5b45-a4a1-ddb0142b5e77",
+      "name": "Rassembler les contenus",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1100,
+        30
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "VeilleCredPgDb01",
+          "name": "Veille · Base PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "59f95423-8644-5205-a3f8-898320f97729",
+              "leftValue": "={{ $json.a_valider.length > 0 || $json.erreurs.length > 0 || !$('Paramètres e-mail').first().json.automatique || $('Paramètres e-mail').first().json.envoyer_si_vide }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f344452d-aaba-51b6-9298-25098379fccd",
+      "name": "Quelque chose à envoyer ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        30
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Un élément par PDF de carrousel à joindre (15 au maximum pour garder un e-mail raisonnable).\nconst params = $('Paramètres e-mail').first().json;\nconst items = $('Rassembler les contenus').first().json.a_valider || [];\nconst pdfs = params.joindre_pdf ? items.filter(p => p.pdf_file).slice(0, 15) : [];\nif (!pdfs.length) return [{ json: { path: null } }];\nreturn pdfs.map(p => ({ json: { path: `/home/node/.n8n-files/output/${p.pdf_file}` } }));\n"
+      },
+      "id": "adf53fc3-7e5f-5954-9180-5facfa804503",
+      "name": "Pièces jointes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        30
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "30a6d51f-f233-5ce5-a381-5a48de29d52d",
+              "leftValue": "={{ !!$json.path }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0d333183-a47e-5bf2-add8-7171a9a796f7",
+      "name": "PDF à joindre ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        30
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "={{ $json.path }}",
+        "options": {}
+      },
+      "id": "88dff440-1d60-599f-a947-26e702777bb6",
+      "name": "Lire les PDF",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        -60
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// E-mail récapitulatif complet (HTML + texte brut) : pour chaque contenu à valider, la fiche,\n// le post LinkedIn, l'article de prospection, le carrousel (PDF joint) ; puis écartées et erreurs.\n// ── Échappement HTML (toute donnée externe — HAL, RSS, LLM — passe par esc) ──\nfunction esc(v) {\n  return String(v ?? '').replace(/[&<>\"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[ch]));\n}\nfunction nl2br(v) { return esc(v).replace(/\\r?\\n/g, '<br>'); }\nfunction safeColor(v, fallback) { return /^#[0-9a-fA-F]{3,8}$/.test(String(v || '')) ? v : fallback; }\nfunction safeUrl(v) { return /^https?:\\/\\//i.test(String(v || '')) ? String(v) : ''; }\nfunction fmtDate(v) {\n  if (!v) return '';\n  const d = new Date(v);\n  return isNaN(d) ? '' : d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Europe/Paris' });\n}\nfunction fmtDateTime(v) {\n  if (!v) return '';\n  const d = new Date(v);\n  return isNaN(d) ? '' : d.toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Paris' });\n}\n\nconst config = $('Lire la configuration').first().json.config;\nconst params = $('Paramètres e-mail').first().json;\nconst data = $('Rassembler les contenus').first().json;\nconst f = config.fablab || {};\nconst base = String(config.interface?.url || 'http://localhost:5678').replace(/\\/+$/, '');\nconst dashboard = `${base}/webhook/veille`;\nconst labsByCode = Object.fromEntries((config.laboratoires || []).map(l => [l.code, l]));\nconst sectorLabel = Object.fromEntries((config.cibles?.secteurs || []).map(s => [s.id, s.label]));\nconst MATURITE = { recherche_amont: 'Recherche amont', preuve_de_concept: 'Preuve de concept', prototype: 'Prototype', transfert_possible: 'Transfert possible' };\nconst primary = safeColor(f.couleurs?.primaire, '#0B3D5C');\nconst accent = safeColor(f.couleurs?.accent, '#F2A900');\n\nconst items = data.a_valider || [];\nconst ecartees = data.ecartees || [];\nconst erreurs = data.erreurs || [];\nconst run = data.derniere_collecte;\n\n// ─── Pièces jointes : on regroupe les PDF lus sur un seul élément ───────────\nconst binary = {};\nconst attached = {};\n$input.all().forEach((item, k) => {\n  if (item.binary && item.binary.data) {\n    binary[`pdf_${k + 1}`] = item.binary.data;\n    attached[item.binary.data.fileName] = true;\n  }\n});\n\n// ─── Briques HTML (styles en ligne pour les clients e-mail) ─────────────────\nconst labNames = codes => (codes || []).map(c => labsByCode[c]?.nom || c).join(', ');\nconst h3 = t => `<h3 style=\"margin:18px 0 6px;font-size:14px;color:${primary};text-transform:uppercase;letter-spacing:.04em\">${esc(t)}</h3>`;\nconst p = (t, style = '') => (t ? `<p style=\"margin:0 0 8px;${style}\">${nl2br(t)}</p>` : '');\nconst ul = list => ((list || []).length ? `<ul style=\"margin:0 0 8px;padding-left:20px\">${list.map(v => `<li style=\"margin-bottom:3px\">${esc(v)}</li>`).join('')}</ul>` : '');\nconst box = inner => `<div style=\"background:#f6f5f1;border:1px solid #e3e1da;border-radius:8px;padding:12px 14px;margin:0 0 8px;white-space:normal\">${inner}</div>`;\nconst tag = (t, bg = '#eeece6', color = '#14202B') => `<span style=\"display:inline-block;background:${bg};color:${color};border-radius:12px;padding:2px 9px;margin:0 4px 4px 0;font-size:12px;font-weight:bold\">${esc(t)}</span>`;\n\nfunction hashtags(li) { return (li.hashtags || []).map(h => '#' + String(h).replace(/^#/, '').replace(/\\s+/g, '')).join(' '); }\n\nfunction section(item, index) {\n  const fi = item.fiche || {};\n  const li = item.linkedin || {};\n  const em = item.email || {};\n  const slides = item.carousel?.slides || [];\n  const projet = fi.idee_projet_fablab || {};\n  const authors = (item.authors || []).slice(0, 4).join(', ') + ((item.authors || []).length > 4 ? ' et al.' : '');\n  const url = safeUrl(item.url);\n  const scoreBg = item.score >= 8 ? '#1e7a46' : accent;\n  return `\n  <tr><td style=\"padding:24px 28px;border-top:6px solid ${index === 0 ? accent : '#e3e1da'}\">\n    <div>${(item.labs || []).map(c => tag(labsByCode[c]?.nom || c, primary, '#fff')).join('')}${tag(`${item.score}/10`, scoreBg, '#fff')}${(item.sectors || []).map(s => tag(sectorLabel[s] || s)).join('')}</div>\n    <h2 style=\"margin:8px 0 4px;font-size:20px;line-height:1.3;color:#14202B\">${esc(fi.titre_accrocheur || item.title)}</h2>\n    <p style=\"margin:0 0 12px;font-size:13px;color:#5d6873\">${url ? `<a href=\"${esc(url)}\" style=\"color:#5d6873\">${esc(item.title)}</a>` : esc(item.title)}${authors ? ` — ${esc(authors)}` : ''}${item.venue ? ` · <i>${esc(item.venue)}</i>` : ''}</p>\n    ${p(fi.resume_vulgarise, 'font-size:15px')}\n\n    ${h3('Post LinkedIn')}\n    ${box(`${nl2br(li.post)}${hashtags(li) ? `<br><br><span style=\"color:${primary}\">${esc(hashtags(li))}</span>` : ''}`)}\n    ${url ? p(`Lien à mettre en premier commentaire : ${item.url}`, 'font-size:12px;color:#5d6873') : ''}\n\n    ${h3('Article pour e-mail de prospection')}\n    ${box(`<b>Objet :</b> ${esc(em.objet)}<br><b>Aperçu :</b> ${esc(em.preheader)}<br><br>${nl2br(em.paragraphe)}<br><br><i>${esc(em.appel_a_action)}</i>`)}\n\n    ${h3(`Carrousel · ${slides.length} diapositives`)}\n    <ol style=\"margin:0 0 8px;padding-left:20px\">${slides.map(s => `<li style=\"margin-bottom:3px\"><b>${esc(s.titre)}</b> — ${esc(s.texte)}</li>`).join('')}</ol>\n    ${p(attached[item.pdf_file] ? `PDF en pièce jointe : ${item.pdf_file}` : 'PDF disponible dans l\\'interface de validation.', 'font-size:12px;color:#5d6873')}\n\n    ${h3('Fiche de valorisation')}\n    <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"width:100%;font-size:14px\">\n      ${[\n        ['Problème terrain', p(fi.probleme_terrain)],\n        ['Apport de la recherche', p(fi.apport_recherche)],\n        ['Bénéfices', ul(fi.benefices)],\n        ['Bénéficiaires', p((fi.exemples_beneficiaires || []).join(' · '))],\n        ['Maturité', p(MATURITE[fi.maturite] || fi.maturite)],\n        ['Projet FabLab', `${p(`${projet.titre || ''} — ${projet.description || ''}`)}${p(`Livrables : ${(projet.livrables || []).join(', ')} · Partenaire : ${projet.partenaire_ideal || ''} · Durée : ${projet.duree_indicative || ''}`, 'font-size:13px;color:#5d6873')}`],\n        ['Chercheurs cités', p((fi.chercheurs_a_citer || []).join(', ') || '—')],\n        ['Points de vigilance', ul(fi.points_de_vigilance)],\n        ['Questions au laboratoire', ul(fi.questions_au_labo)],\n      ].map(([k, v]) => `<tr><td style=\"vertical-align:top;width:170px;padding:4px 12px 4px 0;font-weight:bold;color:${k === 'Points de vigilance' ? '#b3261e' : '#5d6873'}\">${esc(k)}</td><td style=\"vertical-align:top;padding:4px 0\">${v}</td></tr>`).join('')}\n    </table>\n    <p style=\"margin:14px 0 0\"><a href=\"${esc(dashboard)}?statut=to_review#pub-${esc(item.id)}\" style=\"display:inline-block;background:${primary};color:#fff;padding:9px 16px;border-radius:6px;text-decoration:none;font-weight:bold\">Valider ou refuser dans l'interface</a></p>\n  </td></tr>`;\n}\n\nconst intro = items.length\n  ? `${items.length} contenu(s) prêt(s) à relire et valider.`\n  : 'Aucun nouveau contenu à valider.';\nconst collecte = run\n  ? `Dernière collecte : ${fmtDateTime(run.started_at)} — ${run.found} élément(s) trouvé(s), ${run.inserted} nouveau(x)${(run.warnings || []).length ? ` — incidents : ${run.warnings.join(' ; ')}` : ''}.`\n  : '';\n\nconst html = `<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"></head>\n<body style=\"margin:0;padding:0;background:#eeece6\">\n<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#eeece6\"><tr><td align=\"center\" style=\"padding:24px 12px\">\n<table role=\"presentation\" width=\"680\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:680px;width:100%;background:#ffffff;border-radius:10px;font-family:Arial,Helvetica,sans-serif;color:#14202B;font-size:14px;line-height:1.5\">\n  <tr><td style=\"background:${primary};color:#fff;padding:22px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:12px;font-weight:bold;letter-spacing:.12em;text-transform:uppercase;color:${accent}\">Veille scientifique · récapitulatif</div>\n    <div style=\"font-size:22px;font-weight:bold;margin-top:4px\">${esc(f.nom)}</div>\n    <div style=\"margin-top:8px\">${esc(intro)}${ecartees.length ? ` ${ecartees.length} écartée(s) par le tri.` : ''}${erreurs.length ? ` <b style=\"color:#ffb4ab\">${erreurs.length} en erreur.</b>` : ''}</div>\n    ${collecte ? `<div style=\"margin-top:6px;font-size:12px;opacity:.85\">${esc(collecte)}</div>` : ''}\n    ${data.validees_en_attente ? `<div style=\"margin-top:6px;font-size:12px;opacity:.85\">${esc(data.validees_en_attente)} contenu(s) validé(s) attendent encore d'être publiés.</div>` : ''}\n    <p style=\"margin:14px 0 0\"><a href=\"${esc(dashboard)}\" style=\"display:inline-block;background:${accent};color:#14202B;padding:9px 16px;border-radius:6px;text-decoration:none;font-weight:bold\">Ouvrir l'interface de validation</a></p>\n  </td></tr>\n  ${items.map(section).join('')}\n  ${ecartees.length ? `<tr><td style=\"padding:20px 28px;border-top:6px solid #e3e1da\">${h3('Écartées par le tri')}\n    <ul style=\"margin:0;padding-left:20px\">${ecartees.map(e => `<li style=\"margin-bottom:6px\"><b>${esc(e.title)}</b> <span style=\"color:#5d6873\">(${esc(labNames(e.labs))}, ${esc(e.score)}/10)</span><br><span style=\"color:#5d6873;font-size:13px\">${esc(e.raison)}</span></li>`).join('')}</ul>\n    ${p('Pour en traiter une malgré tout : onglet « Écartées » → « Traiter quand même ».', 'font-size:12px;color:#5d6873;margin-top:8px')}</td></tr>` : ''}\n  ${erreurs.length ? `<tr><td style=\"padding:20px 28px;border-top:6px solid #e3e1da\">${h3('En erreur')}\n    <ul style=\"margin:0;padding-left:20px\">${erreurs.map(e => `<li style=\"margin-bottom:6px\"><b>${esc(e.title)}</b><br><span style=\"color:#b3261e;font-size:13px\">${esc(e.erreur)}</span> <span style=\"color:#5d6873;font-size:12px\">(${esc(e.tentatives)} tentative(s))</span></li>`).join('')}</ul></td></tr>` : ''}\n  <tr><td style=\"padding:16px 28px;border-top:1px solid #e3e1da;font-size:12px;color:#5d6873\">Contenus générés par IA à partir des publications HAL et des actualités des laboratoires : à relire avant toute publication. Réglages : config/veille.json.</td></tr>\n</table></td></tr></table></body></html>`;\n\n// ─── Version texte brut ─────────────────────────────────────────────────────\nconst line = '─'.repeat(60);\nconst text = [\n  `${f.nom} — veille scientifique`,\n  intro,\n  collecte,\n  `Interface de validation : ${dashboard}`,\n  '',\n  ...items.flatMap((item, i) => {\n    const fi = item.fiche || {};\n    const li = item.linkedin || {};\n    const em = item.email || {};\n    return [\n      line,\n      `${i + 1}. ${fi.titre_accrocheur || item.title}`,\n      `Source : ${item.title} — ${labNames(item.labs)} — ${item.url || ''}`,\n      `Score : ${item.score}/10 · Secteurs : ${(item.sectors || []).map(s => sectorLabel[s] || s).join(', ')}`,\n      '',\n      fi.resume_vulgarise || '',\n      '',\n      '▸ POST LINKEDIN',\n      li.post || '',\n      hashtags(li),\n      '',\n      '▸ ARTICLE POUR E-MAIL DE PROSPECTION',\n      `Objet : ${em.objet || ''}`,\n      `Aperçu : ${em.preheader || ''}`,\n      em.paragraphe || '',\n      em.appel_a_action || '',\n      '',\n      '▸ CARROUSEL',\n      ...(item.carousel?.slides || []).map((s, k) => `${k + 1}. ${s.titre} — ${s.texte}`),\n      attached[item.pdf_file] ? `(PDF joint : ${item.pdf_file})` : '',\n      '',\n      '▸ POINTS DE VIGILANCE',\n      ...(fi.points_de_vigilance || []).map(v => `- ${v}`),\n      '',\n    ];\n  }),\n  ...(ecartees.length ? [line, 'ÉCARTÉES PAR LE TRI', ...ecartees.map(e => `- ${e.title} (${e.score}/10) : ${e.raison}`), ''] : []),\n  ...(erreurs.length ? [line, 'EN ERREUR', ...erreurs.map(e => `- ${e.title} : ${e.erreur}`), ''] : []),\n].join('\\n');\n\nconst date = fmtDate(new Date());\nreturn [{\n  json: {\n    to: params.to,\n    from: params.from,\n    subject: `[Veille ${f.nom_court || 'FabLab'}] ${items.length ? `${items.length} contenu(s) à valider` : 'rien de nouveau à valider'} — ${date}`,\n    html,\n    text,\n    attachments: Object.keys(binary).join(','),\n  },\n  binary,\n}];\n"
+      },
+      "id": "27f53003-207c-5058-b03e-d649231ee07c",
+      "name": "Rédiger le récapitulatif",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        30
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.from }}",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "both",
+        "text": "={{ $json.text }}",
+        "html": "={{ $json.html }}",
+        "options": {
+          "attachments": "={{ $json.attachments }}",
+          "appendAttribution": false
+        }
+      },
+      "id": "fa78d60e-66a6-5d28-9005-5c6f5d4f8251",
+      "name": "Envoyer l'e-mail",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2420,
+        30
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "VeilleCredSmtp01",
+          "name": "Veille · SMTP"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "Fichier de configuration": {
+      "main": [
+        [
+          {
+            "node": "Lire la configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entrée": {
+      "main": [
+        [
+          {
+            "node": "Fichier de configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lancement manuel": {
+      "main": [
+        [
+          {
+            "node": "Fichier de configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lire la configuration": {
+      "main": [
+        [
+          {
+            "node": "Paramètres e-mail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Paramètres e-mail": {
+      "main": [
+        [
+          {
+            "node": "Envoi activé ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Envoi activé ?": {
+      "main": [
+        [
+          {
+            "node": "Rassembler les contenus",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rassembler les contenus": {
+      "main": [
+        [
+          {
+            "node": "Quelque chose à envoyer ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quelque chose à envoyer ?": {
+      "main": [
+        [
+          {
+            "node": "Pièces jointes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pièces jointes": {
+      "main": [
+        [
+          {
+            "node": "PDF à joindre ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF à joindre ?": {
+      "main": [
+        [
+          {
+            "node": "Lire les PDF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rédiger le récapitulatif",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lire les PDF": {
+      "main": [
+        [
+          {
+            "node": "Rédiger le récapitulatif",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rédiger le récapitulatif": {
+      "main": [
+        [
+          {
+            "node": "Envoyer l'e-mail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Paris",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false,
+    "errorWorkflow": "VeilleErreurs001"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

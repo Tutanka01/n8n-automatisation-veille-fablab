@@ -1,0 +1,875 @@
+{
+  "id": "VeilleInterface1",
+  "name": "Veille · 5 · Interface de validation",
+  "description": "Interface web de validation des contenus générés (webhook protégé par mot de passe).",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 5 · Interface de validation\n**http://localhost:5678/webhook/veille** (identifiants : `.env`)\n\n- Relire, copier le post LinkedIn et l'article d'e-mail, ouvrir le carrousel PDF\n- Valider / refuser / marquer publié / régénérer\n- Écartées : « Traiter quand même » ; Erreurs : « Relancer »\n- Boutons « Lancer la veille maintenant » et « Envoyer le récapitulatif par e-mail »",
+        "width": 560,
+        "height": 280,
+        "color": 7
+      },
+      "id": "addb3e9c-ef84-5517-8a48-8085fdcf871a",
+      "name": "Note 0",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -420
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "veille",
+        "authentication": "basicAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "7dea9a84-bec0-53d9-97bb-a7aa5678153a",
+      "name": "Tableau de bord",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "3f5d2d0e-1c4b-4c55-9d3e-7a1f0b7e0001",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "VeilleCredUiAuth",
+          "name": "Veille · Accès interface"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "/home/node/.n8n-files/config/veille.json",
+        "options": {}
+      },
+      "id": "51c0ef34-aa5b-55af-80f5-e5b7e5927288",
+      "name": "Fichier de configuration",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "fromJson",
+        "destinationKey": "config",
+        "options": {}
+      },
+      "id": "8a565351-f6a1-5cc0-a61f-82a34ad68ab0",
+      "name": "Lire la configuration",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  $1::text AS statut,\n  (SELECT coalesce(jsonb_object_agg(status, n), '{}'::jsonb)\n     FROM (SELECT status, count(*)::int AS n FROM publications GROUP BY status) c) AS counts,\n  (SELECT coalesce(jsonb_agg(to_jsonb(p) - 'raw' - 'abstract' ORDER BY p.sort_at DESC), '[]'::jsonb)\n     FROM (SELECT *, coalesce(processed_at, deposited_at, created_at) AS sort_at\n           FROM publications\n           WHERE status = ANY (CASE WHEN $1 = 'new' THEN ARRAY['new', 'processing'] ELSE ARRAY[$1::text] END)\n           ORDER BY sort_at DESC\n           LIMIT 150) p) AS items,\n  (SELECT to_jsonb(r) FROM collect_runs r ORDER BY id DESC LIMIT 1) AS last_run,\n  (SELECT coalesce(jsonb_agg(e ORDER BY e.created_at DESC), '[]'::jsonb)\n     FROM (SELECT id, created_at, workflow_name, node, message, execution_url FROM workflow_errors\n           WHERE created_at > now() - interval '14 days' ORDER BY created_at DESC LIMIT 10) e) AS wf_errors",
+        "options": {
+          "queryReplacement": "={{ [ ['to_review','approved','published','new','triaged_out','rejected','error'].includes($('Tableau de bord').first().json.query.statut) ? $('Tableau de bord').first().json.query.statut : 'to_review' ] }}"
+        }
+      },
+      "id": "75586020-38a6-533f-b2d7-c7ca28bb37da",
+      "name": "Charger les publications",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "VeilleCredPgDb01",
+          "name": "Veille · Base PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Page de validation : relire, copier, valider / refuser / régénérer les contenus.\n// Toute donnée affichée (HAL, RSS, LLM) est échappée.\n// ── Échappement HTML (toute donnée externe — HAL, RSS, LLM — passe par esc) ──\nfunction esc(v) {\n  return String(v ?? '').replace(/[&<>\"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[ch]));\n}\nfunction nl2br(v) { return esc(v).replace(/\\r?\\n/g, '<br>'); }\nfunction safeColor(v, fallback) { return /^#[0-9a-fA-F]{3,8}$/.test(String(v || '')) ? v : fallback; }\nfunction safeUrl(v) { return /^https?:\\/\\//i.test(String(v || '')) ? String(v) : ''; }\nfunction fmtDate(v) {\n  if (!v) return '';\n  const d = new Date(v);\n  return isNaN(d) ? '' : d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Europe/Paris' });\n}\nfunction fmtDateTime(v) {\n  if (!v) return '';\n  const d = new Date(v);\n  return isNaN(d) ? '' : d.toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Paris' });\n}\n\nconst config = $('Lire la configuration').first().json.config;\nconst query = $('Tableau de bord').first().json.query || {};\nconst data = $input.first().json;\nconst statut = data.statut;\nconst counts = data.counts || {};\nconst items = data.items || [];\nconst run = data.last_run;\nconst wfErrors = data.wf_errors || [];\nconst recentErrors = wfErrors.filter(e => Date.now() - new Date(e.created_at).getTime() < 86400000);\nconst f = config.fablab || {};\nconst labsByCode = Object.fromEntries((config.laboratoires || []).map(l => [l.code, l]));\nconst sectorLabel = Object.fromEntries((config.cibles?.secteurs || []).map(s => [s.id, s.label]));\n\nconst TABS = [\n  ['to_review', 'À valider'], ['approved', 'Validées'], ['published', 'Publiées'], ['new', 'En file'],\n  ['triaged_out', 'Écartées'], ['rejected', 'Refusées'], ['error', 'Erreurs'],\n];\nconst count = s => (s === 'new' ? (counts.new || 0) + (counts.processing || 0) : counts[s] || 0);\nconst MESSAGES = {\n  ok: ['ok', 'Action enregistrée.'],\n  echec: ['err', \"Action impossible : l'élément a déjà changé d'état. La page est à jour.\"],\n  lancee: ['ok', 'Veille lancée : collecte puis génération des contenus. Rechargez la page dans quelques minutes.'],\n  recap: ['ok', \"Récapitulatif en cours d'envoi aux destinataires de config/veille.json. S'il n'arrive pas, voir l'onglet « Erreurs » (réglages SMTP dans .env).\"],\n};\nconst MATURITE = {\n  recherche_amont: 'Recherche amont', preuve_de_concept: 'Preuve de concept',\n  prototype: 'Prototype', transfert_possible: 'Transfert possible',\n};\nconst STEPS = { tri: 'Tri de pertinence', fiche: 'Fiche de valorisation', contenus: 'Rédaction des contenus', pdf: 'Génération du PDF' };\nconst CONFIRM = {\n  regenerer: 'Régénérer relance les appels IA pour cette publication. Continuer ?',\n  refuser: 'Refuser ce contenu ?',\n};\n\nfunction button(value, label, style = '') {\n  const confirm = CONFIRM[value] ? ` onclick=\"return confirm('${esc(CONFIRM[value])}')\"` : '';\n  return `<button type=\"submit\" name=\"action\" value=\"${value}\" class=\"btn ${style}\"${confirm}>${label}</button>`;\n}\nfunction actionForm(p, buttons, withNote = true) {\n  if (!buttons.length) return '';\n  return `<form method=\"post\" action=\"/webhook/veille/action\" class=\"actions\">\n    <input type=\"hidden\" name=\"id\" value=\"${esc(p.id)}\">\n    <input type=\"hidden\" name=\"token\" value=\"${esc(p.review_token)}\">\n    <input type=\"hidden\" name=\"retour\" value=\"${esc(statut)}\">\n    ${withNote ? `<input type=\"text\" name=\"note\" maxlength=\"500\" placeholder=\"Note interne (optionnelle)\" value=\"${esc(p.review_note || '')}\">` : ''}\n    <div class=\"btns\">${buttons.join('')}</div>\n  </form>`;\n}\nfunction copyBlock(id, label, text, rows) {\n  return `<div class=\"copy\"><textarea id=\"${id}\" aria-label=\"${esc(label)}\" rows=\"${rows}\" readonly>${esc(text)}</textarea>\n    <div class=\"row\"><button type=\"button\" class=\"btn small\" onclick=\"copier('${id}', this)\">Copier ${label}</button>\n    <span class=\"muted\">${String(text).length} caractères</span></div></div>`;\n}\nfunction list(values) { return (values || []).length ? `<ul>${values.map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : '—'; }\nfunction meta(p) {\n  const labs = (p.labs || []).map(c => `<span class=\"tag lab\">${esc(labsByCode[c]?.nom || c)}</span>`).join('');\n  const kind = p.kind === 'actualite' ? '<span class=\"tag\">Actualité</span>' : p.doc_type ? `<span class=\"tag\">${esc(p.doc_type)}</span>` : '';\n  const score = p.score != null\n    ? `<span class=\"tag score ${p.score >= 8 ? 'hi' : p.score >= 6 ? 'mid' : 'lo'}\" title=\"Pertinence estimée par l'IA\">${esc(p.score)}/10</span>` : '';\n  const sectors = (p.sectors || []).map(s => `<span class=\"tag sector\">${esc(sectorLabel[s] || s)}</span>`).join('');\n  const date = p.deposited_at ? `<span class=\"muted\">mis en ligne le ${esc(fmtDate(p.deposited_at))}</span>` : '';\n  return `<div class=\"meta\">${labs}${kind}${score}${sectors}${date}</div>`;\n}\nfunction source(p) {\n  const authors = p.authors || [];\n  const who = authors.slice(0, 3).join(', ') + (authors.length > 3 ? ' et al.' : '');\n  const url = safeUrl(p.url);\n  const title = url ? `<a href=\"${esc(url)}\" target=\"_blank\" rel=\"noopener\">${esc(p.title)}</a>` : esc(p.title);\n  return `<p class=\"src\">${title}${who ? ` — ${esc(who)}` : ''}${p.venue ? ` · <i>${esc(p.venue)}</i>` : ''}</p>`;\n}\n\nfunction fullCard(p) {\n  const fi = p.fiche || {};\n  const li = p.linkedin || {};\n  const em = p.email || {};\n  const slides = p.carousel?.slides || [];\n  const projet = fi.idee_projet_fablab || {};\n  const tags = (li.hashtags || []).map(h => '#' + String(h).replace(/^#/, '').replace(/\\s+/g, '')).join(' ');\n  const post = [li.post, tags].filter(Boolean).join('\\n\\n');\n  const article = [em.objet && `Objet : ${em.objet}`, em.preheader && `Aperçu : ${em.preheader}`, em.paragraphe, em.appel_a_action]\n    .filter(Boolean).join('\\n\\n');\n  const buttons = {\n    to_review: [button('approuver', 'Valider', 'primary'), button('refuser', 'Refuser', 'danger'), button('regenerer', 'Régénérer')],\n    approved: [button('publier', 'Marquer comme publiée', 'primary'), button('a_valider', 'Remettre à valider')],\n    published: [button('a_valider', 'Remettre à valider')],\n  }[p.status] || [];\n\n  return `<article class=\"card\" id=\"pub-${esc(p.id)}\">\n    ${meta(p)}\n    <h2>${esc(fi.titre_accrocheur || p.title)}</h2>\n    ${source(p)}\n    ${fi.resume_vulgarise ? `<p class=\"resume\">${esc(fi.resume_vulgarise)}</p>` : ''}\n    ${p.status === 'published' && p.published_at ? `<p class=\"muted\">Publiée le ${esc(fmtDate(p.published_at))}</p>` : ''}\n    <details open><summary>Post LinkedIn</summary>${copyBlock(`li-${p.id}`, 'le post', post, 14)}\n      ${safeUrl(p.url) ? `<p class=\"muted\">Astuce : ajoutez le lien de la publication en premier commentaire — ${esc(p.url)}</p>` : ''}</details>\n    <details><summary>Carrousel PDF · ${slides.length} diapositives</summary>\n      <p><a class=\"btn small primary\" href=\"/webhook/veille/pdf?id=${esc(p.id)}\" target=\"_blank\" rel=\"noopener\">Ouvrir le PDF</a></p>\n      <ol class=\"slides\">${slides.map(s => `<li><b>${esc(s.titre)}</b> — ${esc(s.texte)}</li>`).join('')}</ol></details>\n    <details><summary>Article pour e-mail de prospection</summary>${copyBlock(`em-${p.id}`, \"l'article\", article, 10)}</details>\n    <details><summary>Fiche de valorisation</summary>\n      <dl class=\"fiche\">\n        <dt>Problème terrain</dt><dd>${esc(fi.probleme_terrain)}</dd>\n        <dt>Apport de la recherche</dt><dd>${esc(fi.apport_recherche)}</dd>\n        <dt>Bénéfices</dt><dd>${list(fi.benefices)}</dd>\n        <dt>Bénéficiaires</dt><dd>${esc((fi.exemples_beneficiaires || []).join(' · '))}</dd>\n        <dt>Maturité</dt><dd>${esc(MATURITE[fi.maturite] || fi.maturite || '')}</dd>\n        <dt>Projet FabLab</dt><dd><b>${esc(projet.titre)}</b> — ${esc(projet.description)}\n          <br><span class=\"muted\">Livrables : ${esc((projet.livrables || []).join(', '))} · Partenaire : ${esc(projet.partenaire_ideal)} · Durée : ${esc(projet.duree_indicative)}</span></dd>\n        <dt>Chercheurs cités</dt><dd>${esc((fi.chercheurs_a_citer || []).join(', ')) || '—'}</dd>\n        <dt class=\"warn\">Points de vigilance</dt><dd>${list(fi.points_de_vigilance)}</dd>\n        <dt>Questions au laboratoire</dt><dd>${list(fi.questions_au_labo)}</dd>\n      </dl></details>\n    ${actionForm(p, buttons)}\n  </article>`;\n}\n\nfunction compactCard(p) {\n  const t = p.triage || {};\n  let body = '';\n  let buttons = [];\n  if (p.status === 'triaged_out') {\n    body = `<p>${esc(t.raison)}${t.limites ? ` <span class=\"muted\">— ${esc(t.limites)}</span>` : ''}</p>`;\n    buttons = [button('forcer', 'Traiter quand même')];\n  } else if (p.status === 'rejected') {\n    body = p.review_note ? `<p class=\"muted\">Note : ${esc(p.review_note)}</p>` : '';\n    buttons = [button('a_valider', 'Remettre à valider'), button('regenerer', 'Régénérer')];\n  } else if (p.status === 'error') {\n    body = `<p class=\"error\">${esc(p.last_error)}</p><p class=\"muted\">Étape : ${esc(STEPS[p.processing_step] || 'Traitement')} · ${esc(p.attempts)} tentative(s) — re-tentée automatiquement jusqu'à ${esc(config.traitement?.max_tentatives ?? 3)}. ${p.fiche ? 'La fiche est sauvegardée ; la reprise la réutilisera.' : ''}</p>`;\n    buttons = [button('relancer', 'Remettre en file', 'primary')];\n  } else {\n    body = `<p class=\"muted\">${p.status === 'processing' ? `${esc(STEPS[p.processing_step] || 'Traitement')} — lot en cours` : 'En attente du prochain lot de traitement'}</p>`;\n  }\n  return `<article class=\"card compact\" id=\"pub-${esc(p.id)}\">${meta(p)}<h3>${esc(p.title)}</h3>${source(p)}${body}${actionForm(p, buttons, false)}</article>`;\n}\n\nconst full = ['to_review', 'approved', 'published'].includes(statut);\nconst message = MESSAGES[query.msg];\nconst warnings = run?.warnings?.length ? `<span class=\"error\"> · ${run.warnings.map(esc).join(' · ')}</span>` : '';\n\nconst html = `<!doctype html>\n<html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Veille · ${esc(f.nom_court || f.nom)}</title>\n<style>\n  :root { --bg:#f6f5f1; --card:#fff; --ink:#14202b; --muted:#5d6873; --line:#e3e1da; --primary:${safeColor(f.couleurs?.primaire, '#0B3D5C')};\n    --accent:${safeColor(f.couleurs?.accent, '#F2A900')}; --danger:#b3261e; --ok:#1e7a46; }\n  @media (prefers-color-scheme: dark) { :root { --bg:#12171c; --card:#1b2229; --ink:#e8ecef; --muted:#9aa6b1; --line:#2b343d; --primary:#7fb8de; } }\n  * { box-sizing:border-box; }\n  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif; }\n  .wrap { max-width:980px; margin:0 auto; padding:24px 16px 64px; }\n  header.top { display:flex; justify-content:space-between; align-items:flex-end; gap:16px; flex-wrap:wrap; }\n  .eyebrow { font-size:12px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--accent); }\n  h1 { margin:2px 0 0; font-size:26px; }\n  .run { margin:8px 0 18px; font-size:13px; }\n  nav.tabs { display:flex; gap:6px; flex-wrap:wrap; border-bottom:1px solid var(--line); margin-bottom:18px; }\n  nav.tabs a { padding:8px 12px; border-radius:8px 8px 0 0; color:var(--muted); text-decoration:none; font-weight:600; }\n  nav.tabs a.on { color:var(--ink); background:var(--card); border:1px solid var(--line); border-bottom-color:var(--card); margin-bottom:-1px; }\n  nav.tabs .n { display:inline-block; min-width:20px; padding:0 6px; margin-left:4px; border-radius:10px; background:var(--line); color:var(--ink); font-size:12px; text-align:center; }\n  .flash { padding:10px 14px; border-radius:8px; margin-bottom:16px; }\n  .flash.ok { background:color-mix(in srgb, var(--ok) 14%, transparent); }\n  .flash.err { background:color-mix(in srgb, var(--danger) 14%, transparent); }\n  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 20px; margin-bottom:16px; }\n  .card h2 { margin:6px 0 4px; font-size:20px; line-height:1.3; }\n  .card h3 { margin:6px 0 2px; font-size:16px; }\n  .meta { display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:12px; }\n  .tag { padding:2px 8px; border-radius:999px; background:var(--bg); border:1px solid var(--line); font-weight:600; }\n  .tag.lab { background:var(--primary); color:#fff; border-color:transparent; }\n  .tag.score.hi { background:var(--ok); color:#fff; border-color:transparent; }\n  .tag.score.mid { background:var(--accent); color:#1b1b1b; border-color:transparent; }\n  .src { margin:0 0 10px; font-size:13px; color:var(--muted); }\n  .src a { color:inherit; }\n  .resume { margin:8px 0 12px; }\n  details { border-top:1px solid var(--line); padding:8px 0; }\n  summary { cursor:pointer; font-weight:700; }\n  textarea { width:100%; margin-top:8px; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); font:inherit; font-size:14px; line-height:1.5; resize:vertical; }\n  .row { display:flex; gap:10px; align-items:center; margin-top:6px; }\n  .slides li { margin-bottom:4px; }\n  dl.fiche { display:grid; grid-template-columns:180px 1fr; gap:6px 14px; margin:10px 0 0; }\n  dl.fiche dt { font-weight:700; color:var(--muted); }\n  dl.fiche dd { margin:0; }\n  dl.fiche ul { margin:0; padding-left:18px; }\n  dt.warn { color:var(--danger); }\n  .actions { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }\n  .actions input[type=text] { flex:1; min-width:200px; padding:8px 10px; font:inherit; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); }\n  .btns { display:flex; gap:8px; flex-wrap:wrap; }\n  .btn { display:inline-block; padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--ink); font:inherit; font-size:14px; font-weight:600; line-height:1.2; cursor:pointer; text-decoration:none; }\n  .btn:hover { border-color:var(--primary); }\n  .btn.primary { background:var(--primary); border-color:var(--primary); color:#fff; }\n  .btn.danger { color:var(--danger); }\n  .btn.small { padding:6px 10px; font-size:13px; }\n  .muted { color:var(--muted); font-size:13px; }\n  .error { color:var(--danger); }\n  .empty { text-align:center; color:var(--muted); padding:48px 0; }\n  h2.section { font-size:16px; margin:24px 0 12px; }\n  header.top form { margin:0; }\n  footer { margin-top:32px; font-size:12px; color:var(--muted); }\n  footer a { color:inherit; }\n  @media (max-width:640px) { dl.fiche { grid-template-columns:1fr; } }\n</style></head>\n<body><div class=\"wrap\">\n  <header class=\"top\">\n    <div><div class=\"eyebrow\">Veille scientifique → contenus</div><h1>${esc(f.nom)}</h1></div>\n    <div class=\"btns\">\n      <form method=\"post\" action=\"/webhook/veille/recap\"><button class=\"btn\" type=\"submit\" title=\"Envoie les contenus à valider (fiches, posts, articles, PDF) aux destinataires configurés\">Envoyer le récapitulatif par e-mail</button></form>\n      <form method=\"post\" action=\"/webhook/veille/lancer\"><button class=\"btn primary\" type=\"submit\">Lancer la veille maintenant</button></form>\n    </div>\n  </header>\n  <p class=\"run muted\">Dernière collecte : ${run ? `${esc(fmtDateTime(run.started_at))} — ${esc(run.found)} trouvée(s), ${esc(run.inserted)} nouvelle(s)` : 'aucune pour le moment'}${warnings}</p>\n  <p class=\"run\">${counts.new || 0} en attente → ${counts.processing || 0} dans les lots en cours → ${counts.to_review || 0} à valider · ${counts.error || 0} en erreur. <a href=\"/workflow/VeilleTraitemt01\" target=\"_blank\" rel=\"noopener\">Suivre le traitement dans n8n</a></p>\n  <nav class=\"tabs\">${TABS.map(([key, label]) => `<a href=\"/webhook/veille?statut=${key}\" class=\"${key === statut ? 'on' : ''}\">${label}<span class=\"n\">${count(key)}</span></a>`).join('')}</nav>\n  ${!String(config.llm?.modele || '').trim() ? '<div class=\"flash err\"><b>LLM non configuré.</b> Renseignez « llm.base_url » et « llm.modele » dans config/veille.json (et LLM_API_KEY dans .env), puis lancez la veille.</div>' : ''}\n  ${message ? `<div class=\"flash ${message[0]}\">${esc(message[1])}</div>` : ''}\n  ${recentErrors.length && statut !== 'error' ? `<div class=\"flash err\">${recentErrors.length} erreur(s) de workflow ces dernières 24 h — voir l'onglet « Erreurs ».</div>` : ''}\n  <main>${items.length ? items.map(full ? fullCard : compactCard).join('') : statut === 'error' && wfErrors.length ? '' : '<p class=\"empty\">Rien ici pour le moment.</p>'}\n  ${statut === 'error' && wfErrors.length ? `<h2 class=\"section\">Erreurs des workflows (14 derniers jours)</h2>\n    ${wfErrors.map(e => `<article class=\"card compact\"><div class=\"meta\"><span class=\"tag\">${esc(e.workflow_name)}</span><span class=\"muted\">${esc(fmtDateTime(e.created_at))} · nœud « ${esc(e.node)} »</span></div>\n      <p class=\"error\">${esc(e.message)}</p>${safeUrl(e.execution_url) ? `<p class=\"muted\"><a href=\"${esc(e.execution_url)}\" target=\"_blank\" rel=\"noopener\">Voir l'exécution dans n8n</a></p>` : ''}</article>`).join('')}` : ''}\n  </main>\n  <footer>Réglages : <code>config/veille.json</code> · E-mail récapitulatif automatique : ${config.notifications?.email?.actif ? 'activé' : 'désactivé'} · <a href=\"/home/workflows\" target=\"_blank\" rel=\"noopener\">Éditeur n8n</a></footer>\n</div>\n<script>\n  function copier(id, btn) {\n    var el = document.getElementById(id), label = btn.textContent, ok = false;\n    var done = function (t) { btn.textContent = t; setTimeout(function () { btn.textContent = label; }, 1800); };\n    el.focus(); el.select();\n    try { ok = document.execCommand('copy'); } catch (e) {}\n    if (ok) return done('Copié ✓');\n    if (navigator.clipboard) navigator.clipboard.writeText(el.value).then(function () { done('Copié ✓'); }, function () { done('Texte sélectionné : Ctrl/Cmd + C'); });\n    else done('Texte sélectionné : Ctrl/Cmd + C');\n  }\n</script>\n</body></html>`;\n\nreturn [{ json: { html } }];\n"
+      },
+      "id": "dd99083f-9e6b-5998-8ed6-83a6cf2d3e38",
+      "name": "Page de validation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      },
+      "id": "2d114b9f-b3a1-5c08-a864-6e5c7029e089",
+      "name": "Afficher la page",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "veille/action",
+        "authentication": "basicAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d4daa193-047f-5e4b-8049-aafb26173918",
+      "name": "Action",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "3f5d2d0e-1c4b-4c55-9d3e-7a1f0b7e0002",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "VeilleCredUiAuth",
+          "name": "Veille · Accès interface"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Contrôle strict du formulaire : action connue, identifiant numérique, jeton de la publication.\nconst body = $input.first().json.body || {};\nconst TABS = ['to_review', 'approved', 'published', 'new', 'triaged_out', 'rejected', 'error'];\nconst ACTIONS = {\n  approuver: { status: 'approved', from: ['to_review'] },\n  refuser: { status: 'rejected', from: ['to_review', 'approved'] },\n  publier: { status: 'published', from: ['approved', 'to_review'] },\n  a_valider: { status: 'to_review', from: ['approved', 'published', 'rejected'] },\n  regenerer: { status: 'new', from: ['to_review', 'approved', 'rejected'], reset: true },\n  forcer: { status: 'new', from: ['triaged_out'], reset: true, force: true },\n  relancer: { status: 'new', from: ['error'], reset: true },\n};\nconst action = ACTIONS[body.action];\nconst id = /^\\d{1,12}$/.test(String(body.id || '')) ? Number(body.id) : 0;\nconst token = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(body.token || ''))\n  ? body.token : '00000000-0000-0000-0000-000000000000';\n\nreturn [{\n  json: {\n    id: action ? id : 0,\n    token,\n    status: action ? action.status : 'new',\n    note: String(body.note || '').slice(0, 500),\n    reset: Boolean(action && action.reset),\n    regenerate: body.action === 'regenerer',\n    force: Boolean(action && action.force),\n    from: `{${(action ? action.from : []).join(',')}}`,\n    retour: TABS.includes(body.retour) ? body.retour : 'to_review',\n  },\n}];\n"
+      },
+      "id": "d5007cf0-38e9-5242-8be1-27b89fbda701",
+      "name": "Vérifier la demande",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE publications SET\n  status = $3,\n  review_note = NULLIF($4, ''),\n  reviewed_at = CASE WHEN $3 IN ('approved', 'rejected') THEN now() ELSE reviewed_at END,\n  published_at = CASE WHEN $3 = 'published' THEN now() ELSE published_at END,\n  attempts = CASE WHEN $5::boolean THEN 0 ELSE attempts END,\n  last_error = CASE WHEN $5::boolean THEN NULL ELSE last_error END,\n  forced = forced OR $6::boolean,\n  review_token = CASE WHEN $5::boolean THEN gen_random_uuid() ELSE review_token END,\n  fiche = CASE WHEN $8::boolean THEN NULL ELSE fiche END,\n  linkedin = CASE WHEN $8::boolean THEN NULL ELSE linkedin END,\n  carousel = CASE WHEN $8::boolean THEN NULL ELSE carousel END,\n  email = CASE WHEN $8::boolean THEN NULL ELSE email END,\n  pdf_file = CASE WHEN $8::boolean THEN NULL ELSE pdf_file END,\n  triage = CASE WHEN $8::boolean THEN NULL ELSE triage END,\n  score = CASE WHEN $8::boolean THEN NULL ELSE score END,\n  sectors = CASE WHEN $8::boolean THEN '{}'::text[] ELSE sectors END,\n  llm_usage = CASE WHEN $8::boolean THEN '{}'::jsonb ELSE llm_usage END,\n  processing_step = CASE WHEN $5::boolean THEN NULL ELSE processing_step END\nWHERE id = $1 AND review_token = $2::uuid AND status = ANY($7::text[])\nRETURNING id, status",
+        "options": {
+          "queryReplacement": "={{ [ $json.id, $json.token, $json.status, $json.note, $json.reset, $json.force, $json.from, $json.regenerate ] }}"
+        }
+      },
+      "id": "b0444369-0fc5-53e8-8c41-9b4c905776c2",
+      "name": "Appliquer l'action",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "VeilleCredPgDb01",
+          "name": "Veille · Base PostgreSQL"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "respondWith": "noData",
+        "options": {
+          "responseCode": 303,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Location",
+                "value": "=/webhook/veille?statut={{ $('Vérifier la demande').first().json.retour }}&msg={{ $json.id ? 'ok' : 'echec' }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "ca454d4c-35d7-5122-9dfb-2b8cdf611fce",
+      "name": "Revenir à la liste",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "veille/lancer",
+        "authentication": "basicAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "4683c0dc-ba6a-5fbd-bd60-f0ad3c61470f",
+      "name": "Lancer la veille",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        520
+      ],
+      "webhookId": "3f5d2d0e-1c4b-4c55-9d3e-7a1f0b7e0003",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "VeilleCredUiAuth",
+          "name": "Veille · Accès interface"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Le bouton « Lancer la veille » déclenche des appels LLM payants : on refuse les requêtes\n// envoyées depuis un autre site (protection CSRF). La page de validation, servie en bac à sable\n// par n8n, a une origine « null » ; un autre site aurait sa propre origine.\nconst h = $input.first().json.headers || {};\nconst origin = h.origin;\nconst self = h.host ? [`http://${h.host}`, `https://${h.host}`] : [];\nif (origin && origin !== 'null' && !self.includes(origin)) {\n  throw new Error(`Requête refusée : origine ${origin}`);\n}\nreturn [{ json: { declenche_par: 'interface', a: new Date().toISOString() } }];\n"
+      },
+      "id": "1e9874a0-a66a-5a26-af9f-99ac7d744c12",
+      "name": "Vérifier la provenance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "VeilleCollecte01",
+          "mode": "list",
+          "cachedResultName": "Veille · 1 · Collecte HAL + RSS"
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "a7993f3c-7b79-589f-aae6-e164ee8dd93f",
+      "name": "Démarrer la collecte",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        440,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "noData",
+        "options": {
+          "responseCode": 303,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Location",
+                "value": "=/webhook/veille?statut=to_review&msg=lancee"
+              }
+            ]
+          }
+        }
+      },
+      "id": "ff874b11-5116-5b1c-96fe-2e65a631b530",
+      "name": "Confirmer le lancement",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "veille/recap",
+        "authentication": "basicAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a2c0efb1-ba03-54e1-839b-4361452f6273",
+      "name": "Envoyer le récap",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        960
+      ],
+      "webhookId": "3f5d2d0e-1c4b-4c55-9d3e-7a1f0b7e0005",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "VeilleCredUiAuth",
+          "name": "Veille · Accès interface"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Le bouton « Lancer la veille » déclenche des appels LLM payants : on refuse les requêtes\n// envoyées depuis un autre site (protection CSRF). La page de validation, servie en bac à sable\n// par n8n, a une origine « null » ; un autre site aurait sa propre origine.\nconst h = $input.first().json.headers || {};\nconst origin = h.origin;\nconst self = h.host ? [`http://${h.host}`, `https://${h.host}`] : [];\nif (origin && origin !== 'null' && !self.includes(origin)) {\n  throw new Error(`Requête refusée : origine ${origin}`);\n}\nreturn [{ json: { declenche_par: 'interface', a: new Date().toISOString() } }];\n"
+      },
+      "id": "ed73a9f4-febe-58ea-a57e-d37b49657888",
+      "name": "Vérifier la provenance du récap",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={ \"mode\": \"manuel\" }",
+        "options": {}
+      },
+      "id": "726a3993-ca46-5076-8e2b-05b87e56ec32",
+      "name": "Demande manuelle",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        440,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "VeilleRecapMail1",
+          "mode": "list",
+          "cachedResultName": "Veille · 6 · E-mail récapitulatif"
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "6d33dd89-3de1-52f8-8321-dba5b2345f96",
+      "name": "Envoyer le récapitulatif",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        660,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "noData",
+        "options": {
+          "responseCode": 303,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Location",
+                "value": "=/webhook/veille?statut=to_review&msg=recap"
+              }
+            ]
+          }
+        }
+      },
+      "id": "b67ecfaa-ad4f-5990-aa61-0dc40a9275a7",
+      "name": "Confirmer l'envoi",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "veille/pdf",
+        "authentication": "basicAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "670aeabd-24d0-570e-b4b6-57433ec22ae6",
+      "name": "Carrousel PDF",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        740
+      ],
+      "webhookId": "3f5d2d0e-1c4b-4c55-9d3e-7a1f0b7e0004",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "VeilleCredUiAuth",
+          "name": "Veille · Accès interface"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, pdf_file FROM publications WHERE id = $1 AND pdf_file IS NOT NULL",
+        "options": {
+          "queryReplacement": "={{ [ /^\\d{1,12}$/.test($json.query.id ?? '') ? Number($json.query.id) : 0 ] }}"
+        }
+      },
+      "id": "90760054-5cd8-56cf-b664-0294c6ecf20d",
+      "name": "Trouver le PDF",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        220,
+        740
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "VeilleCredPgDb01",
+          "name": "Veille · Base PostgreSQL"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9a15369c-7631-554e-8281-d9d2ed94a437",
+              "leftValue": "={{ !!$json.pdf_file }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0a10d94b-5361-55a0-a1c4-3f1102d4cde4",
+      "name": "PDF disponible ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        740
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "=/home/node/.n8n-files/output/{{ $json.pdf_file }}",
+        "options": {}
+      },
+      "id": "a0365fc6-ef7a-5d01-9772-70e72f9498c9",
+      "name": "Lire le PDF",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        660,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "binary",
+        "responseDataSource": "automatically",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/pdf"
+              },
+              {
+                "name": "Content-Disposition",
+                "value": "=inline; filename=\"{{ $('Trouver le PDF').first().json.pdf_file }}\""
+              }
+            ]
+          }
+        }
+      },
+      "id": "361ca376-2233-53a8-a27d-3f6f19996252",
+      "name": "Envoyer le PDF",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "PDF introuvable (contenu régénéré ou supprimé).",
+        "options": {
+          "responseCode": 404,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/plain; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "5bd4da6b-23af-55cf-add9-fb41c21d8c9d",
+      "name": "PDF introuvable",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        840
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Afficher la page",
+        "width": 1380,
+        "height": 340,
+        "color": 4
+      },
+      "id": "e91eca6c-0d72-5be6-ad33-a9ba01cbbe58",
+      "name": "Note 26",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Valider ou remettre en file",
+        "width": 1380,
+        "height": 270,
+        "color": 5
+      },
+      "id": "274f75a6-593c-5574-96a9-0f79cff49a8b",
+      "name": "Note 27",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        210
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Lancer une collecte",
+        "width": 1380,
+        "height": 200,
+        "color": 6
+      },
+      "id": "cfeae2d0-95cd-5780-8ee2-e43cd621f176",
+      "name": "Note 28",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Ouvrir un PDF",
+        "width": 1380,
+        "height": 290,
+        "color": 3
+      },
+      "id": "df2067cf-84a2-57de-848b-06e95d4e1a03",
+      "name": "Note 29",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        650
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Demander un e-mail",
+        "width": 1380,
+        "height": 280,
+        "color": 4
+      },
+      "id": "f8528bf4-a71a-50d7-840e-32b57a12f56b",
+      "name": "Note 30",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        880
+      ]
+    }
+  ],
+  "connections": {
+    "Fichier de configuration": {
+      "main": [
+        [
+          {
+            "node": "Lire la configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tableau de bord": {
+      "main": [
+        [
+          {
+            "node": "Fichier de configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lire la configuration": {
+      "main": [
+        [
+          {
+            "node": "Charger les publications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Charger les publications": {
+      "main": [
+        [
+          {
+            "node": "Page de validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Page de validation": {
+      "main": [
+        [
+          {
+            "node": "Afficher la page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action": {
+      "main": [
+        [
+          {
+            "node": "Vérifier la demande",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vérifier la demande": {
+      "main": [
+        [
+          {
+            "node": "Appliquer l'action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Appliquer l'action": {
+      "main": [
+        [
+          {
+            "node": "Revenir à la liste",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lancer la veille": {
+      "main": [
+        [
+          {
+            "node": "Vérifier la provenance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vérifier la provenance": {
+      "main": [
+        [
+          {
+            "node": "Démarrer la collecte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Démarrer la collecte": {
+      "main": [
+        [
+          {
+            "node": "Confirmer le lancement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Envoyer le récap": {
+      "main": [
+        [
+          {
+            "node": "Vérifier la provenance du récap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vérifier la provenance du récap": {
+      "main": [
+        [
+          {
+            "node": "Demande manuelle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Demande manuelle": {
+      "main": [
+        [
+          {
+            "node": "Envoyer le récapitulatif",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Envoyer le récapitulatif": {
+      "main": [
+        [
+          {
+            "node": "Confirmer l'envoi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Carrousel PDF": {
+      "main": [
+        [
+          {
+            "node": "Trouver le PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trouver le PDF": {
+      "main": [
+        [
+          {
+            "node": "PDF disponible ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF disponible ?": {
+      "main": [
+        [
+          {
+            "node": "Lire le PDF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "PDF introuvable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lire le PDF": {
+      "main": [
+        [
+          {
+            "node": "Envoyer le PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Paris",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false,
+    "errorWorkflow": "VeilleErreurs001"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

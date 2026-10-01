@@ -1,0 +1,417 @@
+{
+  "id": "VeilleCollecte01",
+  "name": "Veille · 1 · Collecte HAL + RSS",
+  "description": "Collecte les publications HAL et les actualités RSS des laboratoires, les déduplique en base puis lance le traitement IA.",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 1 · Collecte\n**Quand ?** chaque lundi à 7 h, via le bouton « Lancer la veille » de l'interface, ou à la main.\n\n**Sources** (réglages : `config/veille.json`)\n- API HAL : collections des laboratoires\n- Flux RSS des actualités des laboratoires\n\nLes doublons sont ignorés (clé : source + identifiant). Une source indisponible n'empêche pas les autres d'être collectées : l'incident est affiché dans l'interface.",
+        "width": 560,
+        "height": 300,
+        "color": 7
+      },
+      "id": "d7c484a9-f818-5d40-9a7c-72fa6119e127",
+      "name": "Note 0",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -380
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 7,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "93637600-dbac-578c-b6e2-06adecc31e73",
+      "name": "Chaque lundi à 7 h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        -120
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "20287a65-99d9-5906-b9c8-eb3138593927",
+      "name": "Lancement manuel",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "6172a4f4-5fbc-5a2d-ba1f-63b7d2d25194",
+      "name": "Depuis l'interface",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "/home/node/.n8n-files/config/veille.json",
+        "options": {}
+      },
+      "id": "d53f4544-68e3-5f6e-97a8-af5625ea08ab",
+      "name": "Fichier de configuration",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        260,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "fromJson",
+        "destinationKey": "config",
+        "options": {}
+      },
+      "id": "83474dc3-3829-5df5-b03e-2db7d2736309",
+      "name": "Lire la configuration",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        480,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Un élément par source : les nœuds HTTP gèrent les téléchargements et leurs délais.\nconst config = $input.first().json.config;\nconst labs = config.laboratoires || [];\nconst hal = config.sources?.hal || {};\nconst rss = config.sources?.rss || {};\nconst sources = [];\nconst arr = v => (v == null ? [] : Array.isArray(v) ? v : [v]);\nconst collections = labs.filter(l => l.collection_hal);\nif (hal.actif !== false && collections.length) {\n  const fields = ['halId_s', 'title_s', 'authFullName_s', 'abstract_s', 'keyword_s', 'docType_s', 'journalTitle_s',\n    'conferenceTitle_s', 'bookTitle_s', 'doiIdStr_s', 'uri_s', 'fileMain_s', 'language_s', 'producedDate_s',\n    'publicationDate_tdate', 'submittedDate_tdate', 'collCode_s'];\n  const params = [\n    ['q', '*:*'], ['wt', 'json'], ['fl', fields.join(',')], ['sort', 'submittedDate_tdate desc'],\n    ['rows', String(Number(hal.max_resultats) || 200)],\n    ['fq', `collCode_s:(${collections.map(l => l.collection_hal).join(' OR ')})`],\n    ['fq', `submittedDate_tdate:[NOW-${Number(hal.jours_de_recul) || 30}DAYS/DAY TO NOW]`],\n  ];\n  if (arr(hal.types_exclus).length) params.push(['fq', `-docType_s:(${arr(hal.types_exclus).join(' OR ')})`]);\n  const query = params.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');\n\n  sources.push({ kind: 'hal', url: `https://api.archives-ouvertes.fr/search/?${query}` });\n}\nif (rss.actif !== false) for (const lab of labs.filter(l => l.flux_rss)) {\n  sources.push({ kind: 'rss', lab, url: lab.flux_rss });\n}\nreturn (sources.length ? sources : [{ skip: true }]).map(json => ({ json }));\n"
+      },
+      "id": "ee07100a-1821-5a27-ab27-e5a7d2d5c8e9",
+      "name": "Préparer les sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "022dcfe1-a137-5389-9c79-c6e11eddf406",
+              "leftValue": "={{ !$json.skip }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1a97edfd-9df5-5394-bd85-ceadffc5feb0",
+      "name": "Sources actives ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        920,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text",
+              "outputPropertyName": "body"
+            }
+          }
+        }
+      },
+      "id": "4bb122f5-0ed5-5661-9516-22485fd340be",
+      "name": "Télécharger les sources",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1140,
+        -40
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Normalise les réponses HTTP HAL + RSS ; un incident reste visible dans le journal de collecte.\n// Toujours un seul élément en sortie { rows, warnings, stats } : une source en panne\n// n'empêche pas les autres d'être collectées (l'incident est noté dans warnings).\nconst config = $('Lire la configuration').first().json.config;\nconst labs = config.laboratoires || [];\nconst rss = config.sources?.rss || {};\nconst rows = [];\nconst warnings = [];\nconst stats = { hal: 0, rss: 0 };\n\nconst arr = v => (v == null ? [] : Array.isArray(v) ? v : [v]);\nconst first = v => (Array.isArray(v) ? v[0] : v);\n\nfunction toDate(v) {\n  const m = String(v || '').match(/^(\\d{4})(?:-(\\d{2}))?(?:-(\\d{2}))?/);\n  return m ? `${m[1]}-${m[2] || '01'}-${m[3] || '01'}` : null;\n}\n\nconst ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '\"', apos: \"'\", nbsp: ' ', eacute: 'é', egrave: 'è', ecirc: 'ê',\n  euml: 'ë', agrave: 'à', acirc: 'â', ccedil: 'ç', icirc: 'î', iuml: 'ï', ocirc: 'ô', ucirc: 'û', ugrave: 'ù',\n  oelig: 'œ', Eacute: 'É', Agrave: 'À', rsquo: '’', lsquo: '‘', ldquo: '“', rdquo: '”', laquo: '«', raquo: '»',\n  hellip: '…', ndash: '–', mdash: '—', euro: '€', deg: '°' };\nfunction decode(s) {\n  return String(s || '').replace(/&(#x[0-9a-f]+|#\\d+|[a-z]+);/gi, (m, e) => {\n    if (e[0] === '#') {\n      const code = e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);\n      return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : m;\n    }\n    return ENTITIES[e] ?? m;\n  });\n}\nfunction tag(block, name) {\n  const m = block.match(new RegExp(`<${name}(?:\\\\s[^>]*)?>([\\\\s\\\\S]*?)</${name}>`, 'i'));\n  if (!m) return '';\n  const cdata = m[1].match(/^\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>\\s*$/);\n  return cdata ? cdata[1] : decode(m[1]);\n}\nfunction stripHtml(s) {\n  return decode(String(s || '').replace(/<(br|\\/p|\\/div|\\/li)\\s*\\/?>/gi, '\\n').replace(/<[^>]+>/g, ' '))\n    .replace(/[ \\t]+/g, ' ').replace(/\\s*\\n\\s*/g, '\\n').trim();\n}\n\nconst collections = labs.filter(l => l.collection_hal);\nconst since = new Date(Date.now() - (Number(rss.jours_de_recul) || 30) * 86400000);\nfor (const [index, item] of $input.all().entries()) {\n  const source = $('Préparer les sources').itemMatching(index).json;\n  if (source.skip) continue;\n  const response = item.json;\n  const label = source.kind === 'hal' ? 'HAL' : `RSS ${source.lab.nom}`;\n  try {\n    if (response.error || response.statusCode >= 400) {\n      throw new Error(response.error || `HTTP ${response.statusCode}`);\n    }\n    if (source.kind === 'hal') {\n      const res = JSON.parse(response.body);\n      if (!Array.isArray(res?.response?.docs)) throw new Error('réponse HAL invalide');\n      const docs = res?.response?.docs || [];\n      if (res?.response?.numFound > docs.length) {\n        warnings.push(`HAL : ${res.response.numFound} résultats, ${docs.length} récupérés (augmenter sources.hal.max_resultats)`);\n      }\n      for (const d of docs) {\n        if (!d.halId_s) continue;\n        const colls = arr(d.collCode_s);\n        rows.push({\n          source: 'hal',\n          external_id: d.halId_s,\n          kind: 'publication',\n          labs: collections.filter(l => colls.includes(l.collection_hal)).map(l => l.code),\n          title: first(d.title_s) || '(sans titre)',\n          authors: arr(d.authFullName_s),\n          abstract: arr(d.abstract_s).join('\\n\\n') || null,\n          keywords: arr(d.keyword_s),\n          doc_type: d.docType_s || null,\n          venue: d.journalTitle_s || d.conferenceTitle_s || d.bookTitle_s || null,\n          doi: d.doiIdStr_s || null,\n          url: d.uri_s || `https://hal.science/${d.halId_s}`,\n          pdf_url: d.fileMain_s || null,\n          language: first(d.language_s) || null,\n          published_on: toDate(d.publicationDate_tdate || d.producedDate_s),\n          deposited_at: d.submittedDate_tdate || null,\n          raw: d,\n        });\n        stats.hal++;\n      }\n    } else {\n      const lab = source.lab;\n      const xml = String(response.body || '');\n      if (!/<rss[\\s>]|<rdf:RDF[\\s>]/i.test(xml)) throw new Error('flux RSS invalide');\n      const items = xml.match(/<item[\\s>][\\s\\S]*?<\\/item>/gi) || [];\n      for (const block of items) {\n        const title = stripHtml(tag(block, 'title'));\n        const link = tag(block, 'link').trim();\n        const date = new Date(tag(block, 'pubDate'));\n        if (!title || isNaN(date) || date < since) continue;\n        const guid = tag(block, 'guid').trim();\n        rows.push({\n          source: 'rss',\n          external_id: guid || link || `${lab.code}:${title}:${date.toISOString()}`,\n          kind: 'actualite',\n          labs: [lab.code],\n          title,\n          authors: [],\n          abstract: stripHtml(tag(block, 'description')) || null,\n          keywords: (block.match(/<category[^>]*>[\\s\\S]*?<\\/category>/gi) || []).map(c => stripHtml(c)).filter(Boolean),\n          doc_type: 'ACTU',\n          venue: `Site du ${lab.nom}`,\n          doi: null,\n          url: /^https?:\\/\\//.test(link) ? link : lab.site || null,\n          pdf_url: null,\n          language: 'fr',\n          published_on: date.toISOString().slice(0, 10),\n          deposited_at: date.toISOString(),\n          raw: { title, link, guid, pubDate: date.toISOString() },\n        });\n        stats.rss++;\n      }\n    }\n  } catch (e) {\n    warnings.push(`${label} indisponible : ${e.message}`);\n  }\n}\nreturn [{ json: { rows, warnings, stats } }];\n"
+      },
+      "id": "15125c28-676d-5fa1-8890-0eac98a5ce66",
+      "name": "Collecter HAL + RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH incoming AS (\n  SELECT DISTINCT ON (source, external_id) *\n  FROM jsonb_to_recordset($1::jsonb) AS r(\n    source text, external_id text, kind text, labs text[], title text, authors text[], abstract text,\n    keywords text[], doc_type text, venue text, doi text, url text, pdf_url text, language text,\n    published_on date, deposited_at timestamptz, raw jsonb)\n  WHERE external_id IS NOT NULL\n),\nsaved AS (\n  INSERT INTO publications AS p (source, external_id, kind, labs, title, authors, abstract, keywords,\n    doc_type, venue, doi, url, pdf_url, language, published_on, deposited_at, raw)\n  SELECT source, external_id, coalesce(kind, 'publication'), coalesce(labs, '{}'), title,\n    coalesce(authors, '{}'), abstract, coalesce(keywords, '{}'), doc_type, venue, doi, url, pdf_url,\n    language, published_on, deposited_at, raw\n  FROM incoming\n  ON CONFLICT (source, external_id) DO UPDATE\n    SET labs = ARRAY(SELECT DISTINCT unnest(p.labs || EXCLUDED.labs))\n    WHERE NOT (p.labs @> EXCLUDED.labs)\n  RETURNING (xmax = 0) AS inserted\n)\nINSERT INTO collect_runs (found, inserted, warnings)\nSELECT (SELECT count(*) FROM incoming), (SELECT count(*) FROM saved WHERE inserted), $2::jsonb\nRETURNING id, found, inserted, warnings",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.rows), JSON.stringify($json.warnings) ] }}"
+        }
+      },
+      "id": "6ffe62cc-5236-5bef-90fe-d70b52536a33",
+      "name": "Enregistrer les nouveautés",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1580,
+        60
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "VeilleCredPgDb01",
+          "name": "Veille · Base PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "VeilleTraitemt01",
+          "mode": "list",
+          "cachedResultName": "Veille · 2 · Traitement par lot"
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "9406255b-5f66-5103-83fb-a7a7c22deabf",
+      "name": "Lancer le traitement IA",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1800,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 1 · Sources\nConfiguration → requêtes HAL / RSS",
+        "width": 690,
+        "height": 380,
+        "color": 4
+      },
+      "id": "e50446ae-df0c-53c5-bbc1-74e500a0b618",
+      "name": "Note 12",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 2 · Télécharger et normaliser\n30 s maximum par source. Les incidents restent visibles.",
+        "width": 670,
+        "height": 480,
+        "color": 5
+      },
+      "id": "e12131ea-3c70-514f-bd1f-642356ec9eed",
+      "name": "Note 13",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        900,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 3 · Enregistrer et traiter\nDédoublonnage en base, puis démarrage du lot IA.",
+        "width": 450,
+        "height": 380,
+        "color": 6
+      },
+      "id": "2752daca-4f4e-5c85-8f73-228d50108d2e",
+      "name": "Note 14",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1570,
+        -100
+      ]
+    }
+  ],
+  "connections": {
+    "Fichier de configuration": {
+      "main": [
+        [
+          {
+            "node": "Lire la configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chaque lundi à 7 h": {
+      "main": [
+        [
+          {
+            "node": "Fichier de configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lancement manuel": {
+      "main": [
+        [
+          {
+            "node": "Fichier de configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Depuis l'interface": {
+      "main": [
+        [
+          {
+            "node": "Fichier de configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lire la configuration": {
+      "main": [
+        [
+          {
+            "node": "Préparer les sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Préparer les sources": {
+      "main": [
+        [
+          {
+            "node": "Sources actives ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sources actives ?": {
+      "main": [
+        [
+          {
+            "node": "Télécharger les sources",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Collecter HAL + RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Télécharger les sources": {
+      "main": [
+        [
+          {
+            "node": "Collecter HAL + RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collecter HAL + RSS": {
+      "main": [
+        [
+          {
+            "node": "Enregistrer les nouveautés",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enregistrer les nouveautés": {
+      "main": [
+        [
+          {
+            "node": "Lancer le traitement IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Paris",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false,
+    "errorWorkflow": "VeilleErreurs001"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

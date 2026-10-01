@@ -1,0 +1,306 @@
+{
+  "id": "VeilleAppelLLM01",
+  "name": "Veille · 4 · Appel LLM (compatible OpenAI)",
+  "description": "Appelle n'importe quelle API compatible OpenAI (/chat/completions) et renvoie un objet JSON validé contre un schéma ; une tentative de correction automatique.",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 4 · Appel LLM (toute API compatible OpenAI)\nOpenAI, Mistral, Groq, OpenRouter, DeepSeek, Ollama, LM Studio, vLLM… : `llm.base_url` + `llm.modele` dans `config/veille.json`, clé `LLM_API_KEY` dans `.env`.\n\n- `format_json` : `json_schema` (sortie garantie), `json_object` ou `aucun` (consigne seule).\n- Réponse validée contre le schéma ; si invalide, **une** correction est demandée au modèle.\n- Si le fournisseur refuse `response_format` (HTTP 400/422), la requête est rejouée avec un format dégradé.\n- Réseau / 429 / 5xx : au plus 3 essais, avec attente. 401/403 : arrêt immédiat.\n- Tous les essais partagent `delai_max_secondes` (tri : `delai_rapide_secondes`).",
+        "width": 700,
+        "height": 300,
+        "color": 7
+      },
+      "id": "baa617aa-48a0-56cc-9a09-28e7583adc6d",
+      "name": "Note 0",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "cba09d67-b92d-574b-aecb-8b16d271bc36",
+      "name": "Entrée",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Construit la requête /chat/completions pour n'importe quelle API compatible OpenAI.\n// Entrée : { llm (section de config), niveau: 'rapide'|'principal', system, user, schema_name, schema }\nconst input = $input.first().json;\nconst llm = input.llm || {};\nconst baseUrl = String(llm.base_url || '').trim().replace(/\\/+$/, '');\nconst model = input.niveau === 'rapide' && llm.modele_rapide ? llm.modele_rapide : llm.modele;\nif (!baseUrl || !model) {\n  throw new Error('LLM non configuré : renseignez « llm.base_url » et « llm.modele » dans config/veille.json.');\n}\nconst mode = ['json_schema', 'json_object', 'aucun'].includes(llm.format_json) ? llm.format_json : 'json_schema';\n\nconst system = `${input.system}\n\n## Format de sortie\nRéponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après et sans bloc de code. Il doit respecter ce schéma JSON (les champs « description » précisent le contenu attendu) :\n${JSON.stringify(input.schema)}`;\n\nconst body = {\n  model,\n  messages: [\n    { role: 'system', content: system },\n    { role: 'user', content: input.user },\n  ],\n};\nif (llm.temperature !== null && llm.temperature !== undefined && llm.temperature !== '') body.temperature = Number(llm.temperature);\nif (llm.max_tokens) body[llm.parametre_max_tokens || 'max_tokens'] = Number(llm.max_tokens);\nif (mode === 'json_schema') {\n  body.response_format = { type: 'json_schema', json_schema: { name: input.schema_name || 'reponse', strict: true, schema: input.schema } };\n} else if (mode === 'json_object') {\n  body.response_format = { type: 'json_object' };\n}\nObject.assign(body, llm.parametres_supplementaires || {}, input.niveau === 'rapide' ? llm.parametres_rapide || {} : {});\n\nconst budget = Math.max(1, Number(input.niveau === 'rapide' ? llm.delai_rapide_secondes ?? llm.delai_max_secondes : llm.delai_max_secondes) || 180) * 1000;\nreturn [{\n  json: {\n    url: `${baseUrl}/chat/completions`,\n    body,\n    timeout_ms: budget,\n    deadline: Date.now() + budget,\n    tentative: 1,\n    correction: false,\n    usage: {},\n    schema: input.schema,\n    tache: input.schema_name || 'reponse',\n    mode,\n  },\n}];\n"
+      },
+      "id": "58053544-0feb-5944-85e4-e084395d8292",
+      "name": "Préparer la requête",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "59ed4e11-21ae-5e86-bc87-8ac6d95818cd",
+      "name": "Requête en cours",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": "={{ Math.max(1, $json.deadline - Date.now()) }}",
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text",
+              "outputPropertyName": "body"
+            }
+          }
+        }
+      },
+      "id": "a6a1821a-f91c-556e-a0a7-816dd93e5feb",
+      "name": "Appeler le LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VeilleCredLlmKey",
+          "name": "Veille · Clé API LLM"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Une seule boucle : erreurs temporaires, format refusé, puis au plus une correction JSON.\n// Tous les essais partagent le même budget de temps.\n// ── Lecture robuste des réponses d'une API compatible OpenAI (/chat/completions) ──\n\nfunction llmHttpError(err) {\n  // Élément produit par le nœud HTTP en mode « continuer en cas d'erreur »\n  const e = err && typeof err === 'object' ? err : { message: String(err) };\n  const code = Number(e.httpCode || e.status || e.statusCode || (e.context && e.context.httpCode)) || null;\n  const detail = [e.message, e.description].filter(Boolean).join(' — ');\n  return { code, detail: detail.slice(0, 800) || 'erreur inconnue' };\n}\n\nfunction llmContent(resp) {\n  if (typeof resp === 'string') {\n    try { resp = JSON.parse(resp); } catch (e) { throw new Error('Réponse LLM illisible : ' + resp.slice(0, 300)); }\n  }\n  const choice = resp && Array.isArray(resp.choices) ? resp.choices[0] : null;\n  if (!choice) throw new Error('Réponse LLM sans « choices » : ' + JSON.stringify(resp).slice(0, 500));\n  const msg = choice.message || {};\n  if (msg.refusal) throw new Error('Le modèle a refusé de répondre : ' + msg.refusal);\n  let content = msg.content;\n  if (Array.isArray(content)) content = content.map(p => (typeof p === 'string' ? p : p.text || '')).join('');\n  return { content: String(content ?? ''), finish: choice.finish_reason || null, usage: resp.usage || {}, model: resp.model || null };\n}\n\nfunction llmParseJson(text) {\n  let t = text.replace(/<think>[\\s\\S]*?<\\/think>/gi, '').trim();\n  const fence = t.match(/```(?:json)?\\s*([\\s\\S]*?)```/i);\n  if (fence) t = fence[1].trim();\n  try { return JSON.parse(t); } catch (e) { /* on tente d'isoler l'objet ci-dessous */ }\n  const start = t.indexOf('{');\n  const end = t.lastIndexOf('}');\n  if (start === -1 || end <= start) throw new Error('aucun objet JSON dans la réponse');\n  return JSON.parse(t.slice(start, end + 1));\n}\n\n// Valide un sous-ensemble de JSON Schema et corrige les écarts de type bénins\n// (\"7\" -> 7, \"true\" -> true, valeur d'énumération mal cassée, chaîne seule -> liste).\nfunction llmValidate(schema, value, path, errors) {\n  const type = schema.type;\n  if (type === 'object') {\n    if (value === null || typeof value !== 'object' || Array.isArray(value)) { errors.push(`${path} doit être un objet`); return value; }\n    for (const key of schema.required || []) if (!(key in value)) errors.push(`${path}.${key} est manquant`);\n    for (const [key, sub] of Object.entries(schema.properties || {})) {\n      if (key in value) value[key] = llmValidate(sub, value[key], `${path}.${key}`, errors);\n    }\n    return value;\n  }\n  if (type === 'array') {\n    const items = schema.items || {};\n    if (typeof value === 'string' && items.type === 'string') value = value.trim() ? [value] : [];\n    if (!Array.isArray(value)) { errors.push(`${path} doit être une liste`); return value; }\n    if (schema.minItems !== undefined && value.length < schema.minItems) errors.push(`${path} : au moins ${schema.minItems} éléments`);\n    if (schema.maxItems !== undefined && value.length > schema.maxItems) errors.push(`${path} : au plus ${schema.maxItems} éléments`);\n    return value.map((v, i) => llmValidate(items, v, `${path}[${i}]`, errors));\n  }\n  if (type === 'integer' || type === 'number') {\n    const n = typeof value === 'string' && value.trim() ? Number(value.trim()) : value;\n    if (typeof n !== 'number' || !Number.isFinite(n)) { errors.push(`${path} doit être un nombre`); return value; }\n    if (type === 'integer' && !Number.isInteger(n)) errors.push(`${path} doit être un entier`);\n    if (schema.minimum !== undefined && n < schema.minimum) errors.push(`${path} doit être ≥ ${schema.minimum}`);\n    if (schema.maximum !== undefined && n > schema.maximum) errors.push(`${path} doit être ≤ ${schema.maximum}`);\n    return n;\n  }\n  if (type === 'boolean') {\n    if (value === 'true' || value === 'false') return value === 'true';\n    if (typeof value !== 'boolean') errors.push(`${path} doit être un booléen`);\n    return value;\n  }\n  if (type === 'string') {\n    if (typeof value === 'number') value = String(value);\n    if (typeof value !== 'string') { errors.push(`${path} doit être une chaîne`); return value; }\n    if (schema.minLength && value.trim().length < schema.minLength) errors.push(`${path} est vide ou trop court`);\n    if (schema.enum && !schema.enum.includes(value)) {\n      const hit = schema.enum.find(e => e.toLowerCase() === value.trim().toLowerCase());\n      if (hit) return hit;\n      errors.push(`${path} doit valoir l'une de : ${schema.enum.join(', ')}`);\n    }\n    return value;\n  }\n  return value;\n}\n\nfunction llmAnalyse(resp, schema) {\n  const { content, finish, usage, model } = llmContent(resp);\n  const errors = [];\n  let data;\n  try { data = llmParseJson(content); } catch (e) { errors.push('JSON invalide : ' + e.message); }\n  if (!errors.length) data = llmValidate(schema, data, '$', errors);\n  if (errors.length && finish === 'length') {\n    throw new Error('Réponse LLM tronquée (limite de tokens atteinte) : augmentez « llm.max_tokens » dans config/veille.json.');\n  }\n  return { ok: errors.length === 0, data, errors, content, usage, model };\n}\n\nfunction llmSumUsage(...all) {\n  const out = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };\n  for (const u of all) for (const k of Object.keys(out)) out[k] += Number(u && u[k]) || 0;\n  return out;\n}\n\nconst req = $('Requête en cours').first().json;\nconst resp = $input.first().json;\nconst status = Number(resp.statusCode) || 0;\nlet body = resp.body;\ntry { if (typeof body === 'string') body = JSON.parse(body); } catch (e) { /* llmAnalyse signalera la réponse illisible */ }\nconst fail = detail => { throw new Error(`Appel LLM en échec (${req.tache}) : ${detail}`); };\nfunction retry(changes, motif, wait = 0) {\n  const remaining = req.deadline - Date.now() - wait * 1000;\n  if (remaining < 1000) fail(`budget de temps épuisé — ${motif}`);\n  return [{ json: { ...req, ...changes, ok: false, motif, wait_seconds: wait, tentative: req.tentative + 1 } }];\n}\n\nif (resp.error || status >= 400) {\n  const { detail } = llmHttpError(resp.error || body?.error || { message: String(body ?? '') });\n  const motif = `HTTP ${status || '?'} — ${detail}`;\n  if ((!status || status === 429 || status >= 500) && req.tentative < 3) {\n    const header = resp.headers?.['retry-after'];\n    const seconds = Number(header);\n    const wait = header && !Number.isFinite(seconds) ? (Date.parse(header) - Date.now()) / 1000 : seconds;\n    return retry({}, motif, Math.max(5, Math.ceil(wait) || 0));\n  }\n  const formatIssue = [400, 422].includes(status) && req.body.response_format\n    && /response_format|json_schema|json_object|grammar|structured output/i.test(detail);\n  if (!formatIssue) fail(motif);\n  const next = { ...req.body };\n  if (next.response_format.type === 'json_schema') next.response_format = { type: 'json_object' };\n  else delete next.response_format;\n  return retry({ body: next }, `Format JSON refusé : ${detail}`);\n}\n\nconst r = llmAnalyse(body, req.schema);\nconst usage = llmSumUsage(req.usage, r.usage);\nif (r.ok) return [{ json: { ok: true, data: r.data, usage, model: r.model, corrige: req.correction, tentatives: req.tentative } }];\nif (req.correction) fail(`JSON invalide après correction : ${r.errors.slice(0, 5).join(' ; ')}`);\nreturn retry({\n  correction: true,\n  usage,\n  body: { ...req.body, messages: [\n    ...req.body.messages,\n    { role: 'assistant', content: r.content.slice(0, 20000) },\n    { role: 'user', content: `Corrige ces erreurs :\\n- ${r.errors.slice(0, 15).join('\\n- ')}\\nRenvoie UNIQUEMENT l'objet JSON complet conforme au schéma.` },\n  ] },\n}, r.errors.slice(0, 5).join(' ; '));\n"
+      },
+      "id": "a97f9203-dc12-53d1-89d6-32c222480e0a",
+      "name": "Lire la réponse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "14ac8562-fe2d-5215-b609-491d28f87682",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "546d8677-d719-5a2d-97b5-eb4b57752437",
+      "name": "Réponse exploitable ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $json.wait_seconds }}",
+        "unit": "seconds"
+      },
+      "id": "5b074f3e-847d-51cf-9202-b7511a052559",
+      "name": "Attendre avant reprise",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "99de4698-6cc2-57e8-8be2-9d41e68b0496",
+      "name": "Résultat",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Appel et validation\nLa réponse doit respecter le schéma de la tâche.",
+        "width": 1000,
+        "height": 350,
+        "color": 4
+      },
+      "id": "aa67a3ba-3bf6-5707-8f1f-ab5f34a45230",
+      "name": "Note 9",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        390,
+        -150
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Reprise limitée\nErreur temporaire : attendre. Format refusé : dégrader. JSON invalide : corriger une fois.",
+        "width": 530,
+        "height": 300,
+        "color": 3
+      },
+      "id": "853a1de1-964e-597f-bc4b-a3ca6d2d9114",
+      "name": "Note 10",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        850,
+        150
+      ]
+    }
+  ],
+  "connections": {
+    "Entrée": {
+      "main": [
+        [
+          {
+            "node": "Préparer la requête",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Préparer la requête": {
+      "main": [
+        [
+          {
+            "node": "Requête en cours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Requête en cours": {
+      "main": [
+        [
+          {
+            "node": "Appeler le LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Appeler le LLM": {
+      "main": [
+        [
+          {
+            "node": "Lire la réponse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lire la réponse": {
+      "main": [
+        [
+          {
+            "node": "Réponse exploitable ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Réponse exploitable ?": {
+      "main": [
+        [
+          {
+            "node": "Résultat",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Attendre avant reprise",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attendre avant reprise": {
+      "main": [
+        [
+          {
+            "node": "Requête en cours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Paris",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

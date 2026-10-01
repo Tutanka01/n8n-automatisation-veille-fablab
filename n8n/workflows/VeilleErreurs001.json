@@ -1,0 +1,220 @@
+{
+  "id": "VeilleErreurs001",
+  "name": "Veille · 0 · Alertes d'erreur",
+  "description": "Journalise toute erreur d'un workflow de veille et alerte par e-mail si activé.",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Alertes d'erreur\nDéclenché automatiquement quand un workflow de veille échoue.\nChaque erreur est enregistrée dans la table `workflow_errors`, puis envoyée par e-mail si `notifications.email.actif` vaut `true` dans `config/veille.json`.",
+        "width": 520,
+        "height": 200,
+        "color": 7
+      },
+      "id": "1ddf090f-f90f-5090-b5bb-707640c326f2",
+      "name": "Note 0",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "0a2592b6-6820-560c-8507-52e6367ca45e",
+      "name": "Erreur détectée",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO workflow_errors (workflow_name, execution_id, execution_url, node, message, details)\nVALUES ($1, $2, $3, $4, $5, $6::jsonb)\nRETURNING id",
+        "options": {
+          "queryReplacement": "={{ [ $json.workflow?.name ?? null, $json.execution?.id ?? null, $json.execution?.url ?? null, $json.execution?.lastNodeExecuted ?? null, $json.execution?.error?.message ?? 'Erreur inconnue', JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "ae76bf64-03e1-5db9-b36b-bb51b4a7fb1c",
+      "name": "Journaliser l'erreur",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "VeilleCredPgDb01",
+          "name": "Veille · Base PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "/home/node/.n8n-files/config/veille.json",
+        "options": {}
+      },
+      "id": "6288b953-b5a3-5bef-b20f-405fa8290719",
+      "name": "Fichier de configuration",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "fromJson",
+        "destinationKey": "config",
+        "options": {}
+      },
+      "id": "cd831b84-f867-5118-ac39-9dcab1ed38a5",
+      "name": "Lire la configuration",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "73a8e96f-03eb-57ff-81b2-48608134a386",
+              "leftValue": "={{ $json.config.notifications?.email?.actif === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "00306fef-91bd-5266-b490-dc7521b38bce",
+      "name": "Alerte e-mail activée ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.config.notifications.email.expediteur }}",
+        "toEmail": "={{ [].concat($json.config.notifications.email.destinataires || []).join(', ') }}",
+        "subject": "=Veille FabLab : échec de « {{ $('Erreur détectée').first().json.workflow.name }} »",
+        "emailFormat": "text",
+        "text": "=Le workflow « {{ $('Erreur détectée').first().json.workflow.name }} » a échoué.\n\nNœud : {{ $('Erreur détectée').first().json.execution.lastNodeExecuted }}\nErreur : {{ $('Erreur détectée').first().json.execution.error.message }}\n\nExécution : {{ $('Erreur détectée').first().json.execution.url }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "dc07b4ab-d3d7-528e-9658-c78ca2c4bee7",
+      "name": "Envoyer l'alerte",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1100,
+        -20
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "VeilleCredSmtp01",
+          "name": "Veille · SMTP"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Fichier de configuration": {
+      "main": [
+        [
+          {
+            "node": "Lire la configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Erreur détectée": {
+      "main": [
+        [
+          {
+            "node": "Journaliser l'erreur",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Journaliser l'erreur": {
+      "main": [
+        [
+          {
+            "node": "Fichier de configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lire la configuration": {
+      "main": [
+        [
+          {
+            "node": "Alerte e-mail activée ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alerte e-mail activée ?": {
+      "main": [
+        [
+          {
+            "node": "Envoyer l'alerte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Paris",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

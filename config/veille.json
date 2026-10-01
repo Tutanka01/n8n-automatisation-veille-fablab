@@ -1,0 +1,129 @@
+{
+  "_lisez_moi": "Relu à chaque exécution : aucune relance nécessaire après modification. Le profil du FabLab ci-dessous nourrit tous les prompts : adaptez-le (équipements, offres, contact) pour que l'IA ne décrive que ce qui existe vraiment.",
+
+  "llm": {
+    "_aide": "Toute API compatible OpenAI (/chat/completions). Clé : LLM_API_KEY dans .env. Exemples : OpenAI https://api.openai.com/v1 · Mistral https://api.mistral.ai/v1 · OpenRouter https://openrouter.ai/api/v1 · Groq https://api.groq.com/openai/v1 · Ollama local http://host.docker.internal:11434/v1",
+    "base_url": "https://llm.eva.univ-pau.fr/v1/",
+    "modele": "gemma-4-31b-it-q8_0",
+    "modele_rapide": "",
+    "format_json": "json_schema",
+    "temperature": null,
+    "max_tokens": 4096,
+    "parametre_max_tokens": "max_tokens",
+    "delai_max_secondes": 180,
+    "delai_rapide_secondes": 60,
+    "parametres_rapide": { "max_tokens": 1024 },
+    "parametres_supplementaires": {}
+  },
+
+  "fablab": {
+    "nom": "FabLab Ingénierie Numérique",
+    "nom_court": "FabLab IN",
+    "etablissement": "Université de Pau et des Pays de l'Adour",
+    "etablissement_court": "UPPA",
+    "ville": "Pau",
+    "site_web": "",
+    "contact_nom": "",
+    "contact_email": "",
+    "presentation": "Plateforme de prototypage et d'ingénierie numérique de l'UPPA, ouverte aux entreprises, aux collectivités et aux porteurs de projets. Le FabLab transforme un besoin de terrain en démonstrateur ou en prototype, avec des étudiants encadrés et en lien avec les laboratoires de l'université.",
+    "equipements": [
+      "Impression 3D (dépôt de filament et résine)",
+      "Découpe et gravure laser",
+      "Fraisage numérique",
+      "Électronique, capteurs et objets connectés (Arduino, ESP32, Raspberry Pi)",
+      "Postes de CAO, de simulation et de visualisation 3D"
+    ],
+    "competences": [
+      "Prototypage rapide et conception mécanique",
+      "Instrumentation, acquisition de données et IoT",
+      "Jumeaux numériques et tableaux de bord",
+      "Développement logiciel et traitement de données",
+      "Formation et transmission des connaissances (Éducation 4.0)"
+    ],
+    "offres": [
+      "Projet étudiant encadré sur un besoin réel d'entreprise ou de collectivité",
+      "Preuve de concept, démonstrateur ou prototype",
+      "Atelier découverte des technologies pour les équipes",
+      "Mise en relation avec les laboratoires de l'UPPA"
+    ],
+    "appel_a_action": "Vous avez un besoin, une idée ou un problème terrain ? Proposez-le comme projet au FabLab : on en parle 30 minutes.",
+    "consignes_supplementaires": [],
+    "couleurs": {
+      "primaire": "#0B3D5C",
+      "accent": "#F2A900",
+      "fond": "#F7F5F0",
+      "texte": "#14202B"
+    }
+  },
+
+  "cibles": {
+    "territoire": "Pau, Béarn, Pays de l'Adour et Nouvelle-Aquitaine",
+    "public": "Dirigeants et responsables techniques de TPE/PME, industriels, acteurs de l'agroalimentaire, collectivités et services publics, établissements d'enseignement et de formation.",
+    "secteurs": [
+      { "id": "agroalimentaire", "label": "Agroalimentaire et agriculture" },
+      { "id": "energie", "label": "Énergie et thermique" },
+      { "id": "industrie", "label": "Industrie, mécanique et aéronautique" },
+      { "id": "chimie_procedes", "label": "Chimie et procédés" },
+      { "id": "batiment", "label": "Bâtiment et construction" },
+      { "id": "numerique", "label": "Numérique, logiciel et données" },
+      { "id": "environnement", "label": "Environnement, eau et déchets" },
+      { "id": "mobilite", "label": "Mobilité et transport" },
+      { "id": "sante", "label": "Santé et bien-être" },
+      { "id": "public", "label": "Collectivités et services publics" },
+      { "id": "education", "label": "Éducation et formation" }
+    ]
+  },
+
+  "laboratoires": [
+    {
+      "code": "LATEP",
+      "nom": "LaTEP",
+      "libelle": "Laboratoire de Thermique, Énergétique et Procédés",
+      "collection_hal": "LATEP",
+      "flux_rss": "https://latep.univ-pau.fr/_plugins/web/latep/fr/filter/events/rss.xml",
+      "site": "https://latep.univ-pau.fr"
+    },
+    {
+      "code": "LIUPPA",
+      "nom": "LIUPPA",
+      "libelle": "Laboratoire d'Informatique de l'Université de Pau et des Pays de l'Adour",
+      "collection_hal": "LIUPPA",
+      "flux_rss": "https://liuppa.univ-pau.fr/_plugins/web/liuppa/fr/filter/events/rss.xml",
+      "site": "https://liuppa.univ-pau.fr"
+    }
+  ],
+
+  "sources": {
+    "hal": {
+      "actif": true,
+      "jours_de_recul": 30,
+      "max_resultats": 200,
+      "types_exclus": ["HDR", "LECTURE", "MEM", "IMG", "VIDEO", "SON", "MAP"]
+    },
+    "rss": {
+      "actif": true,
+      "jours_de_recul": 30
+    }
+  },
+
+  "traitement": {
+    "taille_lot": 10,
+    "seuil_pertinence": 6,
+    "max_tentatives": 3
+  },
+
+  "notifications": {
+    "email": {
+      "_aide": "E-mail récapitulatif complet (fiches, posts LinkedIn, articles, PDF joints) envoyé en fin de lot si actif=true ; toujours envoyable via le bouton de l'interface. Serveur SMTP : variables SMTP_* dans .env, puis « make up ».",
+      "actif": false,
+      "destinataires": ["meaebouzidi@univ-pau.fr"],
+      "expediteur": "noreply-isanum@univ-pau.fr",
+      "joindre_pdf": true,
+      "envoyer_si_vide": false
+    }
+  },
+
+  "interface": {
+    "url": "http://localhost:5678"
+  }
+}
