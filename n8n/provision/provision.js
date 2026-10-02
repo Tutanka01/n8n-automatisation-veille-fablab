@@ -1,6 +1,6 @@
 // Provisionnement de l'instance n8n, lancé par entrypoint.sh AVANT chaque démarrage de n8n.
 // Tout est idempotent : un `docker compose up` suffit, que les volumes soient neufs ou non.
-//   1. base « veille » : rôle (mot de passe de .env), base, schéma db/schema.sql
+//   1. base « veille » : rôle (mot de passe de .env), base, schéma db/schema.sql, adresse publique
 //   2. identifiants n8n recopiés depuis .env (base, clé LLM, accès interface, SMTP)
 //   3. workflows de n8n/workflows/ importés et publiés s'ils ont changé, manquent ou ne sont plus publiés
 'use strict';
@@ -62,8 +62,14 @@ async function veilleDatabase() {
       log('Base « veille » créée');
     }
   });
-  await withDb('veille', 'veille', password, (db) => db.query(fs.readFileSync(SCHEMA_FILE, 'utf8')));
-  log('Base « veille » : schéma à jour');
+  await withDb('veille', 'veille', password, async (db) => {
+    await db.query(fs.readFileSync(SCHEMA_FILE, 'utf8'));
+    // Lue par l'e-mail récapitulatif pour ses liens vers l'interface (calculée par entrypoint.sh).
+    await db.query(
+      `INSERT INTO instance_settings (key, value) VALUES ('public_url', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [required('VEILLE_PUBLIC_URL')]);
+  });
+  log(`Base « veille » : schéma à jour · interface de validation : ${env.VEILLE_PUBLIC_URL}/webhook/veille`);
 }
 
 // ── 2 · Identifiants ───────────────────────────────────────────────────────

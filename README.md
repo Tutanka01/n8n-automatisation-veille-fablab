@@ -77,7 +77,7 @@ La fiche et les textes sont sauvegardés **avant** la génération du PDF. Une p
 - **Chaque lundi à 7 h** : collecte (HAL + RSS sur les `jours_de_recul` derniers jours), puis traitement IA.
 - **Chaque jour à 8 h** : traitement de ce qui reste (lots de `taille_lot`) et nouvelles tentatives sur les erreurs.
 - **Interface de validation**, onglets :
-  - *À valider* : relire, **copier** le post et l'article, ouvrir le **PDF**, puis **Valider** / **Refuser** / **Régénérer** ;
+  - *À valider* : choisir un contenu dans la liste de gauche, relire les points « À vérifier avant publication », **copier** le post et l'article, ouvrir le **PDF**, puis **Valider** / **Refuser** / **Régénérer** ;
   - *Validées* → **Marquer comme publiée** une fois postée ;
   - *Écartées* (score sous `seuil_pertinence`) → **Traiter quand même** ;
   - *Erreurs* → **Remettre en file** ; on y voit l'étape concernée et les erreurs des workflows (SMTP, LLM…). Le prochain lot reprend les étapes manquantes.
@@ -123,7 +123,7 @@ Le code des nœuds « Code » vit dans `n8n/src/` ; `n8n/build.py` assemble les 
 
 Dans l'éditeur, les blocs colorés indiquent les étapes à lire. Le workflow **1** collecte, le **2** pilote la boucle et isole les erreurs, le **3** produit une publication en quatre lignes : tri, fiche, contenus, PDF. Le **4** centralise les reprises IA. Les lignes du **5** correspondent chacune à une action de l'interface.
 
-Vérification : `make check` exécute les régressions sans dépendance supplémentaire. `make check-integration` démarre une stack Docker jetable avec un faux LLM et un flux RSS fictif : poursuite après erreur, PDF réel, reprise des étapes, refus de formats JSON, correction, 401, dépassement de délai et reprise d'une publication interrompue dans le même lot. Il utilise uniquement des identifiants de test, désactive les e-mails et supprime ses propres volumes à la fin.
+Vérification : `make check` exécute les régressions sans dépendance supplémentaire. `make check-integration` démarre une stack Docker jetable avec un faux LLM et un flux RSS fictif : poursuite après erreur, PDF réel, reprise des étapes, refus de formats JSON, correction, 401, dépassement de délai et reprise d'une publication interrompue dans le même lot ; puis le proxy sortant (avec et sans), le reverse proxy (HTTPS puis HTTP) et la sauvegarde. Il utilise uniquement des identifiants de test, désactive les e-mails et supprime ses propres volumes à la fin (`openssl` requis pour son certificat de test).
 
 > ⚠ `make workflows` écrase les modifications faites directement dans l'éditeur n8n. Si vous modifiez un workflow dans l'éditeur, sauvegardez-le d'abord avec `make export`.
 
@@ -137,6 +137,8 @@ Pour trouver le code HAL d'un autre laboratoire : `https://api.archives-ouvertes
 | `task-runners` | Exécute le JavaScript des nœuds « Code », isolé du processus n8n. |
 | `postgres` 17 | Base interne de n8n + base métier `veille` (utilisateur dédié). |
 | `gotenberg` 8 | Conversion HTML → PDF des carrousels (Chromium). |
+| `backup` | Sauvegarde chaque nuit les bases, la configuration et les PDF dans `backups/`. |
+| `proxy` (Caddy, optionnel) | Reverse proxy : seul `/webhook/veille…` est exposé au réseau, en HTTP ou HTTPS. |
 
 | Workflow n8n | Rôle |
 |---|---|
@@ -177,7 +179,58 @@ make export      # workflows tels qu'ils sont dans n8n
 - **Sauvegardez `.env`** : il contient `N8N_ENCRYPTION_KEY`, indispensable pour relire les identifiants stockés dans n8n.
 - **Modification de `.env`** (clé LLM, SMTP, mots de passe) : `make up` — Compose recrée le conteneur n8n, qui se resynchronise.
 - **Mise à jour de n8n** : changez `N8N_VERSION` dans `.env` (image `n8n` et image `task-runners` ensemble), puis `make up`.
-- **Accès depuis une autre machine** : `N8N_BIND=0.0.0.0`, `N8N_PUBLIC_URL`, `interface.url` dans la config ; placez n8n derrière un reverse proxy HTTPS (sinon `N8N_SECURE_COOKIE=false`).
+
+## Mise en production
+
+Sur le serveur : `git clone`, puis `make install` (crée `.env`, les secrets et les dossiers). Tout se règle ensuite dans `.env`, suivi de `make up` (ou `docker compose up -d`).
+
+### Proxy sortant (réseau de l'université)
+
+```bash
+OUTBOUND_PROXY=http://proxy.exemple.fr:3128
+OUTBOUND_NO_PROXY=            # hôtes à joindre en direct, ex. un LLM interne
+```
+
+- **Renseigné** : les requêtes HTTP(S) de n8n vers l'extérieur (HAL, flux RSS, LLM hébergé) passent par le proxy.
+- **Vide** : connexion directe.
+- Restent toujours en direct : les services de la stack (Gotenberg, base), les hôtes de `OUTBOUND_NO_PROXY`, et les hôtes de `config/veille.json` dont l'adresse est **interne** (10.x, 172.16–31.x, 192.168.x…), par exemple un LLM de l'établissement : un proxy sortant ne sait pas les joindre (Squid répond `503 ERR_CONNECT_FAIL`). Ils sont détectés au démarrage et listés dans le journal (`[veille] Proxy sortant : … · en direct (adresse interne) : …`) ; après un changement d'hôte dans la configuration : `make restart`.
+- L'e-mail (SMTP) n'est pas concerné : il part en direct vers `SMTP_HOST`.
+- Le téléchargement des images Docker dépend du proxy du **démon Docker**, à régler une fois sur le serveur ([documentation Docker](https://docs.docker.com/engine/daemon/proxy/)).
+
+### Ouvrir l'interface de validation au réseau
+
+n8n n'écoute que sur `127.0.0.1`. Le reverse proxy est le seul service exposé, et il ne relaie que `/webhook/veille…` : l'éditeur n8n, son API et les autres webhooks répondent 404.
+
+```bash
+COMPOSE_PROFILES=proxy
+VEILLE_DOMAIN=veille.exemple.fr
+VEILLE_HTTPS=true             # false = HTTP seul
+TLS_CERTS_DIR=./certs         # dossier contenant vos certificats
+TLS_CERT_FILE=fullchain.pem   # certificat + chaîne intermédiaire (PEM)
+TLS_KEY_FILE=privkey.pem      # clé privée (PEM)
+```
+
+- Déposez vos deux fichiers dans `certs/` (jamais versionné), ou pointez `TLS_CERTS_DIR` vers leur dossier. Un dossier Let's Encrypt `live/…` contient des liens symboliques : indiquez plutôt le dossier `archive/…`, ou copiez les fichiers.
+- Le proxy ne répond qu'au nom `VEILLE_DOMAIN`, redirige HTTP vers HTTPS, et refuse de démarrer si le certificat manque ou ne correspond pas à la clé (`docker compose logs proxy`).
+- Après un renouvellement de certificat : `docker compose restart proxy`.
+- Les liens des e-mails suivent automatiquement cette adresse.
+- **Éditeur n8n** : il reste sur `127.0.0.1:5678`. Depuis votre poste : `ssh -L 5678:127.0.0.1:5678 serveur`, puis http://localhost:5678.
+
+### Sauvegardes
+
+Le conteneur `backup` écrit chaque nuit (`BACKUP_HOUR`, 3 h par défaut) trois fichiers dans `backups/` — bases `n8n` et `veille`, configuration + PDF — et supprime ceux de plus de `BACKUP_KEEP_DAYS` jours (14). `make backup` en fait une immédiatement ; `docker compose ps` affiche `backup` en *unhealthy* si la dernière a échoué. Copiez ce dossier **et `.env`** hors du serveur.
+
+Restauration (sur un serveur neuf : `make install` d'abord, avec le `.env` d'origine) :
+
+```bash
+docker compose stop n8n task-runners
+docker compose exec -T postgres psql -U n8n -d postgres -c 'DROP DATABASE IF EXISTS veille' -c 'CREATE DATABASE veille OWNER veille'
+gunzip -c backups/veille-AAAAMMJJ-HHMMSS.sql.gz | docker compose exec -T postgres psql -qU n8n -d veille
+tar xzf backups/fichiers-AAAAMMJJ-HHMMSS.tar.gz        # config/ et output/
+make up
+```
+
+La base `n8n` (workflows, identifiants) n'a pas besoin d'être restaurée : elle se reconstruit au démarrage à partir de `.env` et des workflows versionnés. Sa sauvegarde ne sert qu'à retrouver l'historique des exécutions.
 
 ## Dépannage
 
@@ -186,6 +239,7 @@ make export      # workflows tels qu'ils sont dans n8n
 | `The requested webhook "GET veille" is not registered` (404) | Workflows non publiés : `make workflows` (ou `make restart`). Si `make up` échoue : `make logs`, lignes `[veille]`. |
 | Bandeau « LLM non configuré » | `llm.base_url` + `llm.modele` dans `config/veille.json`. |
 | Erreurs « HTTP 401 » | `LLM_API_KEY` dans `.env`, puis `make up`. |
+| Erreurs « le proxy sortant n'a pas pu joindre… » ou « page HTML reçue… » | Le proxy ne sait pas joindre cet hôte : `make restart` s'il est interne (détection au démarrage), sinon l'ajouter à `OUTBOUND_NO_PROXY` dans `.env`, puis `make up`. |
 | Erreurs « format refusé » | `"format_json": "json_object"` (ou `"aucun"`). |
 | « Réponse LLM tronquée » | Augmenter `llm.max_tokens`. |
 | Rien n'est collecté | Onglet « À valider » → ligne « Dernière collecte » : incidents HAL/RSS éventuels ; augmenter `jours_de_recul`. |

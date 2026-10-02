@@ -124,6 +124,7 @@
   },
 
   "interface": {
-    "url": "http://localhost:5678"
+    "_aide": "Adresse de l'interface dans les liens des e-mails. Vide = déduite de .env (VEILLE_DOMAIN, sinon N8N_PUBLIC_URL).",
+    "url": ""
   }
 }

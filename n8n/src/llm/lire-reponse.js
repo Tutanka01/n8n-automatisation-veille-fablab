@@ -14,7 +14,13 @@ function retry(changes, motif, wait = 0) {
 }
 
 if (resp.error || status >= 400) {
-  const { detail } = llmHttpError(resp.error || body?.error || { message: String(body ?? '') });
+  // Une page HTML vient d'un intermédiaire (proxy sortant, passerelle), pas de l'API du LLM : on la résume.
+  const page = typeof body === 'string' && /^\s*<(!doctype|html)/i.test(body);
+  const hote = String(req.url).replace(/^https?:\/\//, '').split(/[/:]/)[0];
+  const squid = resp.headers?.['x-squid-error'];
+  const { detail } = page
+    ? { detail: `${squid ? `le proxy sortant n'a pas pu joindre ${hote} (${squid})` : `page HTML reçue au lieu de l'API de ${hote} (« ${((body.match(/<title>([^<]*)/i) || [])[1] || 'sans titre').trim()} »)`}. Derrière un proxy sortant, un hôte interne se déclare dans OUTBOUND_NO_PROXY (.env), puis « make up »` }
+    : llmHttpError(resp.error || body?.error || { message: String(body ?? '') });
   const motif = `HTTP ${status || '?'} — ${detail}`;
   if ((!status || status === 429 || status >= 500) && req.tentative < 3) {
     const header = resp.headers?.['retry-after'];

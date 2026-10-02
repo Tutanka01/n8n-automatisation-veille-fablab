@@ -679,7 +679,8 @@ SELECT
   (SELECT coalesce(jsonb_agg(jsonb_build_object('id', id, 'title', title, 'erreur', last_error, 'tentatives', attempts)), '[]'::jsonb)
      FROM cible WHERE status = 'error') AS erreurs,
   (SELECT to_jsonb(r) FROM collect_runs r ORDER BY id DESC LIMIT 1) AS derniere_collecte,
-  (SELECT count(*)::int FROM publications WHERE status = 'approved') AS validees_en_attente
+  (SELECT count(*)::int FROM publications WHERE status = 'approved') AS validees_en_attente,
+  (SELECT value FROM instance_settings WHERE key = 'public_url') AS url_publique
 """, "={{ [ $json.ids ] }}", (1100, 30))
     wf.condition("Quelque chose à envoyer ?",
                  "={{ $json.a_valider.length > 0 || $json.erreurs.length > 0 "

@@ -4,6 +4,9 @@
 # Démarrage : `make install` la première fois (génère .env), puis `make up`.
 # Le conteneur n8n se provisionne lui-même à chaque démarrage (n8n/provision/) : base « veille »,
 # identifiants, compte propriétaire et workflows publiés. `docker compose up -d` suffit donc toujours.
+#
+# n8n n'écoute que sur 127.0.0.1. Pour ouvrir l'interface de validation au réseau, activer le
+# reverse proxy dans .env (COMPOSE_PROFILES=proxy, VEILLE_DOMAIN, VEILLE_HTTPS) : lui seul est exposé.
 
 name: veille-fablab
 
@@ -72,6 +75,17 @@ services:
       N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
       WEBHOOK_URL: ${N8N_PUBLIC_URL:-http://localhost:5678}/
       N8N_EDITOR_BASE_URL: ${N8N_PUBLIC_URL:-http://localhost:5678}/
+      # Reverse proxy : avec VEILLE_DOMAIN, l'adresse publique de l'interface devient celle du proxy
+      # (calculée par entrypoint.sh) ; n8n fait confiance à ses en-têtes X-Forwarded-*.
+      N8N_PROXY_HOPS: "1"
+      VEILLE_DOMAIN: ${VEILLE_DOMAIN:-}
+      VEILLE_HTTPS: ${VEILLE_HTTPS:-false}
+      PROXY_HTTP_PORT: ${PROXY_HTTP_PORT:-80}
+      PROXY_HTTPS_PORT: ${PROXY_HTTPS_PORT:-443}
+      # Proxy sortant (réseau de l'université) : vide = connexion directe ; renseigné = toutes les
+      # requêtes HTTP(S) de n8n (HAL, RSS, LLM) passent par lui (appliqué par entrypoint.sh).
+      OUTBOUND_PROXY: ${OUTBOUND_PROXY:-}
+      OUTBOUND_NO_PROXY: ${OUTBOUND_NO_PROXY:-}
       # Fuseau horaire des déclencheurs planifiés
       GENERIC_TIMEZONE: ${TZ:-Europe/Paris}
       TZ: ${TZ:-Europe/Paris}
@@ -153,6 +167,63 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+    logging: *logging
+
+  # Reverse proxy, optionnel (COMPOSE_PROFILES=proxy dans .env) : seule l'interface de validation
+  # (/webhook/veille…) est relayée, en HTTP ou en HTTPS avec vos certificats (proxy/entrypoint.sh).
+  proxy:
+    image: caddy:2.11-alpine
+    profiles: ["proxy"]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/opt/veille/proxy/entrypoint.sh"]
+    ports:
+      - "${PROXY_BIND:-0.0.0.0}:${PROXY_HTTP_PORT:-80}:80"
+      - "${PROXY_BIND:-0.0.0.0}:${PROXY_HTTPS_PORT:-443}:443"
+    environment:
+      VEILLE_DOMAIN: ${VEILLE_DOMAIN:-}
+      VEILLE_HTTPS: ${VEILLE_HTTPS:-false}
+      TLS_CERT_FILE: ${TLS_CERT_FILE:-fullchain.pem}
+      TLS_KEY_FILE: ${TLS_KEY_FILE:-privkey.pem}
+      PROXY_HTTPS_PORT: ${PROXY_HTTPS_PORT:-443}
+    volumes:
+      - ./proxy:/opt/veille/proxy:ro
+      - ${TLS_CERTS_DIR:-./certs}:/certs:ro
+    depends_on:
+      n8n:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8081/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    logging: *logging
+
+  # Sauvegarde quotidienne des bases, de la configuration et des PDF dans ./backups (backup/backup.sh).
+  backup:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    init: true
+    entrypoint: ["/bin/sh", "/opt/veille/backup/backup.sh"]
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_HOUR: ${BACKUP_HOUR:-3}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      TZ: ${TZ:-Europe/Paris}
+    volumes:
+      - ./backup:/opt/veille/backup:ro
+      - ./backups:/backups
+      - ./config:/data/config:ro
+      - ./output:/data/output:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # « Sain » tant que la dernière sauvegarde tentée a réussi.
+      test: ["CMD-SHELL", "test ! -e /tmp/echec"]
+      interval: 30s
+      timeout: 5s
+      retries: 1
     logging: *logging
 
 volumes:

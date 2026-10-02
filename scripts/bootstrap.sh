@@ -50,16 +50,35 @@ prepare_env() {
   set_if_empty VEILLE_UI_PASSWORD "$(rand 20)"
   load_env
 
-  mkdir -p output
+  mkdir -p output backups certs
   # Sous Linux, le conteneur n8n (uid 1000) doit pouvoir écrire les PDF
   if [ "$(uname -s)" = "Linux" ]; then chmod 0777 output; fi
+}
+
+# Le reverse proxy refuse de démarrer sans domaine ni certificats : autant le dire avant.
+check_proxy() {
+  case ",${COMPOSE_PROFILES:-}," in *,proxy,*) ;; *)
+    [ -z "${VEILLE_DOMAIN:-}" ] || warn "VEILLE_DOMAIN est défini mais le reverse proxy est éteint : ajoutez COMPOSE_PROFILES=proxy dans .env"
+    return ;;
+  esac
+  [ -n "${VEILLE_DOMAIN:-}" ] || die "COMPOSE_PROFILES=proxy : renseignez VEILLE_DOMAIN dans .env."
+  if [ "${VEILLE_HTTPS:-false}" = true ]; then
+    local dir="${TLS_CERTS_DIR:-./certs}" file
+    for file in "${TLS_CERT_FILE:-fullchain.pem}" "${TLS_KEY_FILE:-privkey.pem}"; do
+      [ -f "$dir/$file" ] || die "VEILLE_HTTPS=true : $dir/$file est introuvable (certificat et clé privée au format PEM)."
+    done
+  else
+    warn "Reverse proxy en HTTP : les mots de passe circulent en clair. Passez VEILLE_HTTPS=true dès que les certificats sont en place."
+  fi
 }
 
 start_stack() {
   log "Démarrage des conteneurs (premier lancement : ~1 min)…"
   if ! docker compose up -d --wait --wait-timeout 300; then
+    docker compose ps >&2 || true
     docker compose logs --tail 40 n8n >&2 || true
-    die "n8n n'a pas démarré correctement (journal ci-dessus ; complet : make logs)."
+    docker compose logs --tail 15 proxy backup >&2 2>/dev/null || true
+    die "La stack n'a pas démarré correctement (journal ci-dessus ; complet : docker compose logs)."
   fi
   ok "Stack opérationnelle : base, identifiants et workflows provisionnés, interface en ligne"
 }
@@ -72,7 +91,10 @@ check_config() {
 }
 
 summary() {
-  local url="${N8N_PUBLIC_URL:-http://localhost:5678}"
+  local url="${N8N_PUBLIC_URL:-http://localhost:5678}" public
+  # Adresse inscrite au démarrage par le conteneur n8n (reverse proxy si VEILLE_DOMAIN, sinon n8n)
+  public="$(docker compose exec -T postgres psql -AtU n8n -d veille -c \
+    "SELECT value FROM instance_settings WHERE key = 'public_url'" 2>/dev/null || true)"
   cat <<EOF
 
 ────────────────────────────────────────────────────────────────────
@@ -82,11 +104,12 @@ summary() {
      identifiant           $N8N_OWNER_EMAIL
      mot de passe          dans .env (N8N_OWNER_PASSWORD)
 
-  Interface de validation  $url/webhook/veille
+  Interface de validation  ${public:-$url}/webhook/veille
      identifiant           $VEILLE_UI_USER
      mot de passe          dans .env (VEILLE_UI_PASSWORD)
 
   PDF des carrousels       ./output/
+  Sauvegardes (chaque nuit) ./backups/
 
   Prochaines étapes
     1. config/veille.json : LLM (base_url, modele) + profil du FabLab
@@ -100,6 +123,7 @@ EOF
 main() {
   check_prereqs
   prepare_env
+  check_proxy
   start_stack
   check_config
   summary

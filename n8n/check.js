@@ -54,6 +54,11 @@ const response = (data, tokens = 3) => ({ statusCode: 200, body: JSON.stringify(
   await assert.rejects(() => read({ ...prepared, deadline: Date.now() - 1 }, transient), /budget/);
   const broken = { statusCode: 503, body: 'gateway unavailable' };
   assert.equal((await read(prepared, broken)).ok, false);
+  // Page d'erreur d'un proxy sortant (Squid) : message exploitable, pas le HTML brut.
+  const squid = { statusCode: 503, headers: { 'x-squid-error': 'ERR_CONNECT_FAIL 113' },
+    body: '<!DOCTYPE html>\n<html><head><title>ERROR: The requested URL could not be retrieved</title></head></html>' };
+  assert.match((await read(prepared, squid)).motif, /proxy sortant n'a pas pu joindre test \(ERR_CONNECT_FAIL 113\).*OUTBOUND_NO_PROXY/);
+  await assert.rejects(() => read({ ...prepared, tentative: 3 }, { ...squid, headers: {} }), /page HTML reçue.*could not be retrieved.*OUTBOUND_NO_PROXY/);
 
   const validate = vm.runInNewContext(`${source('lib/llm-json.js')}; llmAnalyse`);
   const prompts = vm.runInNewContext(`${source('lib/prompts.js')}; ({pSchemaContenus, pSchemaTri})`);
@@ -95,6 +100,21 @@ const response = (data, tokens = 3) => ({ statusCode: 200, body: JSON.stringify(
   assert.equal((await action('regenerer')).regenerate, true);
   assert.equal((await action('relancer')).regenerate, false);
 
+  const page = async (headers, items) => (await run('interface/page.js', [{ statut: 'to_review', counts: { to_review: items.length }, items }], {
+    'Lire la configuration': [{ config: { llm: { modele: 'test' } } }], 'Tableau de bord': [{ query: {}, headers }],
+  }))[0].json.html;
+  const review = { id: 7, status: 'to_review', title: '<script>alert(1)</script>', review_token: 'jeton', labs: ['TEST'], score: 8,
+    fiche: { points_de_vigilance: ['À vérifier'] }, linkedin: { post: 'Ligne 1\n"Ligne 2"', hashtags: ['Veille'] },
+    carousel: { slides: [{ titre: 'Diapositive', texte: 'Texte' }] }, email: { objet: 'Objet' } };
+  const direct = await page({}, [review]);
+  assert(!direct.includes('<script>alert(1)'));
+  assert(direct.includes('data-copie="Ligne 1\n&quot;Ligne 2&quot;\n\n#Veille"'));
+  assert(direct.includes('id="pub-7"') && direct.includes('href="#pub-7"') && direct.includes('À vérifier avant publication'));
+  assert(direct.includes('/home/workflows'));
+  // Derrière le reverse proxy, l'éditeur n8n n'est pas exposé : aucun lien vers lui.
+  assert(!(await page({ 'x-forwarded-host': 'veille.test' }, [review])).includes('/home/workflows'));
+  assert((await page({}, [])).includes('Rien à valider'));
+
   for (const file of fs.readdirSync(path.join(__dirname, 'workflows'))) {
     const wf = JSON.parse(fs.readFileSync(path.join(__dirname, 'workflows', file)));
     const names = new Set(wf.nodes.map(n => n.name));
@@ -104,5 +124,5 @@ const response = (data, tokens = 3) => ({ statusCode: 200, body: JSON.stringify(
       for (const group of outputs.main) for (const link of group) assert(names.has(link.node));
     }
   }
-  console.log('✔ Délais, reprises HTTP, formats JSON, validation, collecte partielle et réutilisation des étapes.');
+  console.log('✔ Délais, reprises HTTP, formats JSON, validation, collecte partielle, réutilisation des étapes et page de validation.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

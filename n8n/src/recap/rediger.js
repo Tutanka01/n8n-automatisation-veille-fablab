@@ -5,7 +5,8 @@ const config = $('Lire la configuration').first().json.config;
 const params = $('Paramètres e-mail').first().json;
 const data = $('Rassembler les contenus').first().json;
 const f = config.fablab || {};
-const base = String(config.interface?.url || 'http://localhost:5678').replace(/\/+$/, '');
+// Adresse de l'interface : celle de .env (reverse proxy ou n8n), sauf si la configuration l'impose.
+const base = String(config.interface?.url || data.url_publique || 'http://localhost:5678').replace(/\/+$/, '');
 const dashboard = `${base}/webhook/veille`;
 const labsByCode = Object.fromEntries((config.laboratoires || []).map(l => [l.code, l]));
 const sectorLabel = Object.fromEntries((config.cibles?.secteurs || []).map(s => [s.id, s.label]));

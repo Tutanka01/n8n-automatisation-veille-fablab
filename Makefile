@@ -45,22 +45,23 @@ workflows: build ## Régénère, réimporte et publie les workflows (écrase les
 
 run: ## Lance une veille maintenant (collecte + traitement IA)
 	@set -a; . ./.env; set +a; \
-	curl -fsS -o /dev/null -u "$$VEILLE_UI_USER:$$VEILLE_UI_PASSWORD" -X POST "http://127.0.0.1:$${N8N_PORT:-5678}/webhook/veille/lancer" \
+	curl -fsS --noproxy '*' -o /dev/null -u "$$VEILLE_UI_USER:$$VEILLE_UI_PASSWORD" -X POST "http://127.0.0.1:$${N8N_PORT:-5678}/webhook/veille/lancer" \
 	  && echo "Veille lancée : suivez-la dans l'interface ou avec « make logs »"
 
 recap: ## Envoie maintenant l'e-mail récapitulatif (contenus à valider)
 	@set -a; . ./.env; set +a; \
-	curl -fsS -o /dev/null -u "$$VEILLE_UI_USER:$$VEILLE_UI_PASSWORD" -X POST "http://127.0.0.1:$${N8N_PORT:-5678}/webhook/veille/recap" \
+	curl -fsS --noproxy '*' -o /dev/null -u "$$VEILLE_UI_USER:$$VEILLE_UI_PASSWORD" -X POST "http://127.0.0.1:$${N8N_PORT:-5678}/webhook/veille/recap" \
 	  && echo "Récapitulatif en cours d'envoi (en cas de souci : onglet « Erreurs » de l'interface)"
 
 open: ## Ouvre l'interface de validation
 	@set -a; . ./.env; set +a; open "$${N8N_PUBLIC_URL:-http://localhost:5678}/webhook/veille" 2>/dev/null \
 	  || xdg-open "$${N8N_PUBLIC_URL:-http://localhost:5678}/webhook/veille"
 
-status: ## Nombre de publications par statut + dernières erreurs
+status: ## Nombre de publications par statut, dernières erreurs, dernière sauvegarde
 	@$(COMPOSE) exec -T postgres psql -U n8n -d veille -c \
 	  "SELECT status, count(*) FROM publications GROUP BY 1 ORDER BY 1" -c \
 	  "SELECT created_at::timestamp(0), workflow_name, left(message, 120) AS message FROM workflow_errors ORDER BY id DESC LIMIT 5"
+	@echo "Dernière sauvegarde : $$(ls -t backups/veille-*.sql.gz 2>/dev/null | head -1 || true)"
 
 export: ## Sauvegarde les workflows tels qu'ils sont dans n8n (backups/)
 	@mkdir -p backups/workflows-$(STAMP)
@@ -68,11 +69,8 @@ export: ## Sauvegarde les workflows tels qu'ils sont dans n8n (backups/)
 	$(COMPOSE) cp n8n:/tmp/export/. backups/workflows-$(STAMP)/
 	@echo "Workflows exportés dans backups/workflows-$(STAMP)"
 
-backup: ## Sauvegarde les bases (n8n + veille), la config et les PDF (backups/)
-	@mkdir -p backups
-	$(COMPOSE) exec -T postgres pg_dump -U n8n -d n8n | gzip > backups/n8n-$(STAMP).sql.gz
-	$(COMPOSE) exec -T postgres pg_dump -U n8n -d veille | gzip > backups/veille-$(STAMP).sql.gz
-	tar czf backups/fichiers-$(STAMP).tar.gz config output
+backup: ## Sauvegarde maintenant les bases, la config et les PDF (aussi faite chaque nuit) dans backups/
+	$(COMPOSE) exec -T backup sh /opt/veille/backup/backup.sh now
 	@echo "Sauvegarde dans backups/ (conservez aussi .env : il contient la clé de chiffrement n8n)"
 
 .PHONY: help install up down restart ps logs build check check-integration workflows run recap open status export backup

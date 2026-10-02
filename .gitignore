@@ -1,6 +1,9 @@
 .env
 output/*
 !output/.gitkeep
-backups/
+backups/*
+!backups/.gitkeep
+certs/*
+!certs/.gitkeep
 .DS_Store
 __pycache__/

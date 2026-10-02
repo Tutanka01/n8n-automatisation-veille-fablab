@@ -77,6 +77,12 @@ DROP TRIGGER IF EXISTS publications_updated_at ON publications;
 CREATE TRIGGER publications_updated_at BEFORE UPDATE ON publications
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+-- Paramètres d'instance écrits au démarrage depuis .env (ex. public_url : adresse de l'interface)
+CREATE TABLE IF NOT EXISTS instance_settings (
+  key    text PRIMARY KEY,
+  value  text NOT NULL
+);
+
 -- Journal des collectes
 CREATE TABLE IF NOT EXISTS collect_runs (
   id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
