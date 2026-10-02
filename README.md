@@ -74,7 +74,7 @@ La fiche et les textes sont sauvegardés **avant** la génération du PDF. Une p
 
 ## Au quotidien
 
-- **Chaque lundi à 7 h** : collecte (HAL + RSS sur les `jours_de_recul` derniers jours), puis traitement IA.
+- **Collecte automatique** (par défaut chaque lundi à 7 h) : HAL + RSS sur les `jours_de_recul` derniers jours, puis traitement IA. **Jours, heure et activation se règlent dans l'interface** : panneau « Collecte automatique » en haut de la page, cases des jours + heure + **Enregistrer** (pris en compte dans la minute, pas de redémarrage). L'heure est dans le fuseau `TZ` de `.env`. Si n8n était arrêté à l'heure prévue, la collecte part à son retour, le même jour ; une heure déjà passée aujourd'hui n'est pas rattrapée à l'enregistrement.
 - **Chaque jour à 8 h** : traitement de ce qui reste (lots de `taille_lot`) et nouvelles tentatives sur les erreurs.
 - **Interface de validation**, onglets :
   - *À valider* : choisir un contenu dans la liste de gauche, relire les points « À vérifier avant publication », **copier** le post et l'article, ouvrir le **PDF**, puis **Valider** / **Refuser** / **Régénérer** ;
@@ -102,7 +102,7 @@ Pour chaque contenu à valider, l'e-mail contient la fiche de valorisation, le p
 ```
 
 - `actif` : envoi automatique à la fin de chaque lot qui produit des contenus (ou des erreurs).
-- `envoyer_si_vide` : envoyer aussi « rien de nouveau » après la collecte du lundi.
+- `envoyer_si_vide` : envoyer aussi « rien de nouveau » après une collecte planifiée.
 - Envoi à la demande : bouton « Envoyer le récapitulatif par e-mail » de l'interface, ou `make recap` (fonctionne même si `actif` vaut `false`).
 - Si `actif` vaut `true`, les mêmes destinataires reçoivent aussi une alerte quand un workflow échoue.
 
@@ -149,6 +149,7 @@ Pour trouver le code HAL d'un autre laboratoire : `https://api.archives-ouvertes
 | 4 · Appel LLM | Appel générique compatible OpenAI + validation JSON + correction. |
 | 5 · Interface de validation | Pages web et actions (webhooks protégés par mot de passe). |
 | 6 · E-mail récapitulatif | E-mail complet avec PDF joints. |
+| 7 · Planificateur | Chaque minute, lit la table `schedule` (réglée dans l'interface) et lance la collecte au jour et à l'heure choisis, une fois par jour. Ses exécutions réussies ne sont pas conservées. |
 
 ### Démarrage de n8n (`n8n/provision/`)
 

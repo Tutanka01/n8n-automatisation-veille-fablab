@@ -251,9 +251,12 @@ networks:
         def sql(query, db='veille'):
             return compose('exec', '-T', 'postgres', 'psql', '-At', '-U', 'n8n', '-d', db, '-v', 'ON_ERROR_STOP=1', '-c', query)
 
-        def http(url, method='GET', authenticated=False):
+        def http(url, method='GET', authenticated=False, form=None):
             headers = {'Authorization': 'Basic dGVzdDp0ZXN0LW9ubHk='} if authenticated else {}
-            js = f"fetch({json.dumps(url)}, {{method:{json.dumps(method)},headers:{json.dumps(headers)},redirect:'manual'}}).then(async r=>console.log(JSON.stringify({{status:r.status,location:r.headers.get('location'),body:await r.text()}})))"
+            if form is not None:
+                headers['Content-Type'] = 'application/x-www-form-urlencoded'
+            body = f',body:{json.dumps(form)}' if form is not None else ''
+            js = f"fetch({json.dumps(url)}, {{method:{json.dumps(method)},headers:{json.dumps(headers)}{body},redirect:'manual'}}).then(async r=>console.log(JSON.stringify({{status:r.status,location:r.headers.get('location'),body:await r.text()}})))"
             return json.loads(compose('exec', '-T', 'n8n', 'node', '-e', js))
 
         def routes():
@@ -365,6 +368,39 @@ networks:
             execute('normal', prepare=False)
             assert sql('SELECT status FROM publications WHERE id=1') == 'to_review'
             print('✔ Publication interrompue : libérée et reprise dans le même lot.', flush=True)
+
+            # Planification : enregistrée depuis l'interface (validée), puis appliquée par le planificateur.
+            def planning(form):
+                return http('http://localhost:5678/webhook/veille/planification', 'POST', True, form)['location']
+            schedule = "SELECT enabled, days, at_time FROM schedule"
+            assert sql(schedule) == 't|{1}|07:00:00'  # par défaut : chaque lundi à 7 h, comme avant
+            for refused in ('retour=error&actif=1&heure=07:00', 'retour=error&actif=1&heure=25:61&j1=1', 'retour=error&heure=&j1=1'):
+                assert 'msg=planning_invalide' in planning(refused), refused
+            assert sql(schedule) == 't|{1}|07:00:00'
+            today = "(SELECT last_fired_on = (now() AT TIME ZONE 'Europe/Paris')::date FROM schedule)"
+            assert planning('retour=error&actif=1&heure=00:00&j1=1&j2=1&j3=1&j4=1&j5=1&j6=1&j7=1') \
+                == '/webhook/veille?statut=error&msg=planning_ok#planification'
+            assert sql(schedule) == 't|{1,2,3,4,5,6,7}|00:00:00'
+            assert sql(f'SELECT {today}') == 't'  # 0 h est déjà passé aujourd'hui : pas de collecte immédiate
+            panel = http('http://localhost:5678/webhook/veille', authenticated=True)['body']
+            assert 'tous les jours à 00:00' in panel and 'name="heure" value="00:00"' in panel
+            before = int(sql('SELECT coalesce(max(id),0) FROM execution_entity', 'n8n'))
+            runs = f"""SELECT count(*) FROM execution_entity WHERE "workflowId"='VeilleCollecte01' AND id>{before}"""
+            sql('UPDATE schedule SET last_fired_on = NULL')
+            deadline = time.monotonic() + 90
+            while sql(runs, 'n8n') == '0' and time.monotonic() < deadline:
+                time.sleep(2)
+            assert sql(runs, 'n8n') == '1', 'le planificateur ne lance pas la collecte à l\'heure enregistrée'
+            assert sql(f'SELECT {today}') == 't'
+            while sql(f"""SELECT status FROM execution_entity WHERE "workflowId"='VeilleTraitemt01' AND id>{before} ORDER BY id DESC LIMIT 1""", 'n8n') != 'success':
+                assert time.monotonic() < deadline + 60, 'le lot qui suit la collecte planifiée ne termine pas'
+                time.sleep(2)
+            time.sleep(65)  # au moins un nouveau passage du planificateur : pas de second lancement le même jour
+            assert sql(runs, 'n8n') == '1'
+            assert sql(f"""SELECT count(*) FROM execution_entity WHERE "workflowId"='VeillePlanifie01' AND status='success'""", 'n8n') == '0'
+            assert planning('retour=error&heure=07:00&j1=1') == '/webhook/veille?statut=error&msg=planning_ok#planification'
+            assert sql(schedule) == 'f|{1}|07:00:00'
+            print("✔ Planification : enregistrée depuis l'interface (entrées invalides refusées), collecte lancée à l'heure choisie, une seule fois par jour.", flush=True)
 
             # Restauration de la sauvegarde (procédure du README), puis redémarrage sur l'autre configuration.
             count = sql('SELECT count(*) FROM publications')

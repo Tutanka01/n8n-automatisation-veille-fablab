@@ -3,8 +3,8 @@
 
   "llm": {
     "_aide": "Toute API compatible OpenAI (/chat/completions). Clé : LLM_API_KEY dans .env. Exemples : OpenAI https://api.openai.com/v1 · Mistral https://api.mistral.ai/v1 · OpenRouter https://openrouter.ai/api/v1 · Groq https://api.groq.com/openai/v1 · Ollama local http://host.docker.internal:11434/v1",
-    "base_url": "https://llm.eva.univ-pau.fr/v1/",
-    "modele": "gemma-4-31b-it-q8_0",
+    "base_url": "https://openrouter.ai/api/v1",
+    "modele": "deepseek/deepseek-v4.1-flash",
     "modele_rapide": "",
     "format_json": "json_schema",
     "temperature": null,

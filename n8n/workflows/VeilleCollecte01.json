@@ -7,7 +7,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## 1 · Collecte\n**Quand ?** chaque lundi à 7 h, via le bouton « Lancer la veille » de l'interface, ou à la main.\n\n**Sources** (réglages : `config/veille.json`)\n- API HAL : collections des laboratoires\n- Flux RSS des actualités des laboratoires\n\nLes doublons sont ignorés (clé : source + identifiant). Une source indisponible n'empêche pas les autres d'être collectées : l'incident est affiché dans l'interface.",
+        "content": "## 1 · Collecte\n**Quand ?** aux jours et à l'heure réglés dans l'interface (workflow 7 · Planificateur), via le bouton « Lancer la veille » de l'interface, ou à la main.\n\n**Sources** (réglages : `config/veille.json`)\n- API HAL : collections des laboratoires\n- Flux RSS des actualités des laboratoires\n\nLes doublons sont ignorés (clé : source + identifiant). Une source indisponible n'empêche pas les autres d'être collectées : l'incident est affiché dans l'interface.",
         "width": 560,
         "height": 300,
         "color": 7
@@ -19,31 +19,6 @@
       "position": [
         -60,
         -380
-      ]
-    },
-    {
-      "parameters": {
-        "rule": {
-          "interval": [
-            {
-              "field": "weeks",
-              "weeksInterval": 1,
-              "triggerAtDay": [
-                1
-              ],
-              "triggerAtHour": 7,
-              "triggerAtMinute": 0
-            }
-          ]
-        }
-      },
-      "id": "93637600-dbac-578c-b6e2-06adecc31e73",
-      "name": "Chaque lundi à 7 h",
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.2,
-      "position": [
-        0,
-        -120
       ]
     },
     {
@@ -61,8 +36,8 @@
       "parameters": {
         "inputSource": "passthrough"
       },
-      "id": "6172a4f4-5fbc-5a2d-ba1f-63b7d2d25194",
-      "name": "Depuis l'interface",
+      "id": "506be061-9096-51df-a938-fa5fbabe44ae",
+      "name": "Depuis l'interface ou le planificateur",
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1.1,
       "position": [
@@ -238,8 +213,8 @@
         "height": 380,
         "color": 4
       },
-      "id": "e50446ae-df0c-53c5-bbc1-74e500a0b618",
-      "name": "Note 12",
+      "id": "c96c64d1-3be1-586b-b748-627887b32edc",
+      "name": "Note 11",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
@@ -254,8 +229,8 @@
         "height": 480,
         "color": 5
       },
-      "id": "e12131ea-3c70-514f-bd1f-642356ec9eed",
-      "name": "Note 13",
+      "id": "e50446ae-df0c-53c5-bbc1-74e500a0b618",
+      "name": "Note 12",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
@@ -270,8 +245,8 @@
         "height": 380,
         "color": 6
       },
-      "id": "2752daca-4f4e-5c85-8f73-228d50108d2e",
-      "name": "Note 14",
+      "id": "e12131ea-3c70-514f-bd1f-642356ec9eed",
+      "name": "Note 13",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
@@ -292,17 +267,6 @@
         ]
       ]
     },
-    "Chaque lundi à 7 h": {
-      "main": [
-        [
-          {
-            "node": "Fichier de configuration",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Lancement manuel": {
       "main": [
         [
@@ -314,7 +278,7 @@
         ]
       ]
     },
-    "Depuis l'interface": {
+    "Depuis l'interface ou le planificateur": {
       "main": [
         [
           {

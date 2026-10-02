@@ -12,6 +12,7 @@ const counts = data.counts || {};
 const items = data.items || [];
 const run = data.last_run;
 const wfErrors = data.wf_errors || [];
+const planning = data.planning || null;
 const recentErrors = wfErrors.filter(e => Date.now() - new Date(e.created_at).getTime() < 86400000);
 const f = config.fablab || {};
 const col = f.couleurs || {};
@@ -35,6 +36,8 @@ const MESSAGES = {
   ok: ['ok', 'Action enregistrée.'],
   echec: ['err', "Action impossible : l'élément a déjà changé d'état. La page est à jour."],
   lancee: ['ok', 'Veille lancée : collecte puis génération des contenus. Rechargez la page dans quelques minutes.'],
+  planning_ok: ['ok', 'Planification enregistrée.'],
+  planning_invalide: ['err', "Planification refusée : choisissez une heure valide et au moins un jour. Rien n'a été modifié."],
   recap: ['ok', "Récapitulatif en cours d'envoi aux destinataires de config/veille.json. S'il n'arrive pas, voir l'onglet « Erreurs » (réglages SMTP dans .env)."],
 };
 const MATURITE = {
@@ -201,6 +204,35 @@ function ligne(p) {
   return `<li class="ligne" id="pub-${esc(p.id)}"><div><div class="ligne-meta">${meta(p)}${score(p)}</div><h3>${titleLink(p)}</h3>${source(p, false)}${body}</div>${actionForm(p, buttons, false)}</li>`;
 }
 
+// Collecte automatique : jours (ISO, 1 = lundi), heure et activation, enregistrés en base et lus chaque minute
+// par le workflow « Planificateur ». L'heure est celle du fuseau affiché.
+const JOURS = [[1, 'Lundi'], [2, 'Mardi'], [3, 'Mercredi'], [4, 'Jeudi'], [5, 'Vendredi'], [6, 'Samedi'], [7, 'Dimanche']];
+function jourLong(iso) {
+  const [y, m, d] = String(iso).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+}
+function planificationPanel(pl) {
+  const jours = pl.jours || [];
+  const noms = JOURS.filter(([n]) => jours.includes(n)).map(([, nom]) => nom.toLowerCase());
+  const resume = !pl.actif ? 'désactivée'
+    : jours.length === 7 ? `tous les jours à ${esc(pl.heure)}` : `${esc(noms.join(', '))} à ${esc(pl.heure)}`;
+  const prochain = pl.actif && pl.prochain ? ` · prochaine : ${esc(jourLong(pl.prochain))} à ${esc(pl.heure)}` : '';
+  const ouvert = String(query.msg || '').startsWith('planning') ? ' open' : '';
+  return `<details class="plan" id="planification"${ouvert}>
+    <summary><b>Collecte automatique</b> <span class="muted">${resume}${prochain}</span></summary>
+    <form method="post" action="/webhook/veille/planification">
+      <input type="hidden" name="retour" value="${esc(statut)}">
+      <label class="actif"><input type="checkbox" name="actif" value="1"${pl.actif ? ' checked' : ''}> Lancer la veille automatiquement</label>
+      <fieldset><legend>Jours</legend>
+        <div class="jours">${JOURS.map(([n, nom]) => `<label><input type="checkbox" name="j${n}" value="1"${jours.includes(n) ? ' checked' : ''}><span>${nom.slice(0, 3)}.</span></label>`).join('')}</div>
+      </fieldset>
+      <label class="heure">Heure <input type="time" name="heure" value="${esc(pl.heure)}" required></label>
+      <button class="btn primary" type="submit">Enregistrer</button>
+      <p class="muted">Heure locale (${esc(pl.fuseau)}). Le traitement IA suit la collecte ; une reprise des restes a lieu chaque jour à 8 h. Pris en compte dans la minute.</p>
+    </form>
+  </details>`;
+}
+
 function etape([key, label]) {
   return `<li><a href="/webhook/veille?statut=${key}"${key === statut ? ' aria-current="page"' : ''}${key === 'error' && count(key) ? ' class="alerte"' : ''}>${label}<span class="n">${count(key)}</span></a></li>`;
 }
@@ -267,6 +299,20 @@ const html = `<!doctype html>
   .circuit a.alerte[aria-current] .n { color:inherit; }
   .etat { margin:0 0 20px; color:var(--sourdine); font-size:13px; }
 
+  .plan { margin:0 0 20px; padding:10px 16px; border:1px solid var(--trait); border-radius:4px; background:var(--feuille); }
+  .plan summary { cursor:pointer; }
+  .plan form { display:flex; flex-wrap:wrap; align-items:center; gap:14px 22px; padding:14px 0 4px; }
+  .plan fieldset { margin:0; padding:0; border:0; }
+  .plan legend { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
+  .plan label { cursor:pointer; }
+  .plan .jours { display:flex; flex-wrap:wrap; gap:6px; }
+  .plan .jours label { position:relative; }
+  .plan .jours input { position:absolute; opacity:0; inset:0; margin:0; cursor:pointer; }
+  .plan .jours span { display:block; min-width:52px; padding:6px 10px; border:1.5px solid var(--trait); border-radius:999px; text-align:center; font-weight:600; font-size:13px; }
+  .plan .jours input:checked + span { background:var(--action); border-color:var(--action); color:var(--sur-action); }
+  .plan .jours input:focus-visible + span { outline:3px solid var(--accent); outline-offset:2px; }
+  .plan input[type=time] { padding:7px 10px; border:1.5px solid var(--trait); border-radius:6px; background:var(--creux); color:var(--encre); font:inherit; }
+  .plan form > .muted { flex-basis:100%; margin:0; }
   .avis { margin:0 0 14px; padding:10px 14px; border-left:4px solid var(--ok); border-radius:2px; background:var(--feuille); }
   .avis.err { border-left-color:var(--alerte); }
   .vide { margin:0; padding:56px 24px; border:1.5px dashed var(--trait); border-radius:4px; color:var(--sourdine); text-align:center; }
@@ -386,6 +432,7 @@ const html = `<!doctype html>
   <p class="etat">${run ? `Dernière collecte le ${esc(fmtDateTime(run.started_at))} : ${esc(run.found)} trouvée(s), ${esc(run.inserted)} nouvelle(s).` : 'Aucune collecte pour le moment.'}${warnings}
     ${counts.processing ? ` ${esc(counts.processing)} publication(s) en cours de traitement : rechargez la page pour suivre.` : ''}
     ${editeur ? ' <a href="/workflow/VeilleTraitemt01" target="_blank" rel="noopener">Suivre le traitement dans n8n</a>' : ''}</p>
+  ${planning ? planificationPanel(planning) : ''}
   ${!String(config.llm?.modele || '').trim() ? '<p class="avis err"><b>LLM non configuré.</b> Renseignez « llm.base_url » et « llm.modele » dans config/veille.json (et LLM_API_KEY dans .env), puis lancez la veille.</p>' : ''}
   ${message ? `<p class="avis ${message[0]}">${esc(message[1])}</p>` : ''}
   ${recentErrors.length && statut !== 'error' ? `<p class="avis err">${recentErrors.length} erreur(s) de workflow ces dernières 24 h : voir l'onglet « Erreurs ».</p>` : ''}

@@ -38,6 +38,7 @@ WF_PUB = ("VeilleTraiterPub", "Veille · 3 · Traiter une publication")
 WF_LLM = ("VeilleAppelLLM01", "Veille · 4 · Appel LLM (compatible OpenAI)")
 WF_UI = ("VeilleInterface1", "Veille · 5 · Interface de validation")
 WF_RECAP = ("VeilleRecapMail1", "Veille · 6 · E-mail récapitulatif")
+WF_PLANNING = ("VeillePlanifie01", "Veille · 7 · Planificateur")
 
 
 def code(path: str) -> str:
@@ -220,16 +221,13 @@ RETURNING id
 def wf_collecte():
     wf = Workflow(WF_COLLECTE, "Collecte les publications HAL et les actualités RSS des laboratoires, "
                                "les déduplique en base puis lance le traitement IA.")
-    wf.note("## 1 · Collecte\n**Quand ?** chaque lundi à 7 h, via le bouton « Lancer la veille » de l'interface, "
-            "ou à la main.\n\n**Sources** (réglages : `config/veille.json`)\n- API HAL : collections des laboratoires\n"
+    wf.note("## 1 · Collecte\n**Quand ?** aux jours et à l'heure réglés dans l'interface (workflow 7 · Planificateur), "
+            "via le bouton « Lancer la veille » de l'interface, ou à la main.\n\n**Sources** (réglages : `config/veille.json`)\n- API HAL : collections des laboratoires\n"
             "- Flux RSS des actualités des laboratoires\n\nLes doublons sont ignorés (clé : source + identifiant). "
             "Une source indisponible n'empêche pas les autres d'être collectées : l'incident est affiché dans l'interface.",
             (-60, -380), 560, 300)
-    wf.add("Chaque lundi à 7 h", "n8n-nodes-base.scheduleTrigger", 1.2, {
-        "rule": {"interval": [{"field": "weeks", "weeksInterval": 1, "triggerAtDay": [1], "triggerAtHour": 7, "triggerAtMinute": 0}]},
-    }, (0, -120))
     wf.add("Lancement manuel", "n8n-nodes-base.manualTrigger", 1, {}, (0, 60))
-    wf.sub_trigger("Depuis l'interface", (0, 240))
+    wf.sub_trigger("Depuis l'interface ou le planificateur", (0, 240))
     read, cfg = wf.config((260, 60))
     wf.code("Préparer les sources", "collecte/preparer-sources.js", (700, 60))
     wf.condition("Sources actives ?", "={{ !$json.skip }}", (920, 60))
@@ -266,7 +264,7 @@ SELECT (SELECT count(*) FROM incoming), (SELECT count(*) FROM saved WHERE insert
 RETURNING id, found, inserted, warnings
 """, "={{ [ JSON.stringify($json.rows), JSON.stringify($json.warnings) ] }}", (1580, 60))
     wf.call("Lancer le traitement IA", WF_LOT, (1800, 60), wait=False)
-    for trigger in ("Chaque lundi à 7 h", "Lancement manuel", "Depuis l'interface"):
+    for trigger in ("Lancement manuel", "Depuis l'interface ou le planificateur"):
         wf.link(trigger, read)
     wf.chain(cfg, "Préparer les sources", "Sources actives ?")
     wf.link("Sources actives ?", "Télécharger les sources", 0)
@@ -516,7 +514,8 @@ def wf_interface():
             "- Relire, copier le post LinkedIn et l'article d'e-mail, ouvrir le carrousel PDF\n"
             "- Valider / refuser / marquer publié / régénérer\n"
             "- Écartées : « Traiter quand même » ; Erreurs : « Relancer »\n"
-            "- Boutons « Lancer la veille maintenant » et « Envoyer le récapitulatif par e-mail »",
+            "- Boutons « Lancer la veille maintenant » et « Envoyer le récapitulatif par e-mail »\n"
+            "- « Collecte automatique » : jours, heure et activation de la collecte planifiée",
             (-60, -420), 560, 280)
     hook = {"authentication": "basicAuth", "responseMode": "responseNode", "options": {}}
     html_headers = {"entries": [
@@ -546,6 +545,17 @@ SELECT
            ORDER BY sort_at DESC
            LIMIT 150) p) AS items,
   (SELECT to_jsonb(r) FROM collect_runs r ORDER BY id DESC LIMIT 1) AS last_run,
+  (SELECT jsonb_build_object(
+      'actif', s.enabled, 'jours', s.days, 'heure', to_char(s.at_time, 'HH24:MI'), 'fuseau', z.name,
+      'prochain', (SELECT to_char(g.d, 'YYYY-MM-DD')
+                   FROM generate_series(date_trunc('day', now() AT TIME ZONE z.name),
+                                        date_trunc('day', now() AT TIME ZONE z.name) + interval '7 days',
+                                        interval '1 day') AS g(d)
+                   WHERE extract(isodow FROM g.d)::int = ANY (s.days) AND g.d + s.at_time > now() AT TIME ZONE z.name
+                   ORDER BY g.d LIMIT 1))
+     FROM schedule s,
+          (SELECT coalesce((SELECT value FROM instance_settings WHERE key = 'timezone'), 'Europe/Paris') AS name) z
+     WHERE s.id = 1) AS planning,
   (SELECT coalesce(jsonb_agg(e ORDER BY e.created_at DESC), '[]'::jsonb)
      FROM (SELECT id, created_at, workflow_name, node, message, execution_url FROM workflow_errors
            WHERE created_at > now() - interval '14 days' ORDER BY created_at DESC LIMIT 10) e) AS wf_errors
@@ -601,6 +611,32 @@ RETURNING id, status
     redirect("Confirmer le lancement", "=/webhook/veille?statut=to_review&msg=lancee", (660, 520))
     wf.chain("Lancer la veille", "Vérifier la provenance", "Démarrer la collecte", "Confirmer le lancement")
 
+    # Enregistrer la planification de la collecte
+    wf.add("Planification", "n8n-nodes-base.webhook", 2, {"httpMethod": "POST", "path": "veille/planification", **hook},
+           (0, 1240), webhookId="3f5d2d0e-1c4b-4c55-9d3e-7a1f0b7e0006", credentials=CRED["ui"])
+    wf.code("Vérifier la planification", "interface/verifier-planification.js", (220, 1240))
+    # Une demande invalide ne met rien à jour : sans id renvoyé, la redirection annonce l'échec.
+    wf.sql("Enregistrer la planification", """
+WITH local AS (
+  SELECT now() AT TIME ZONE coalesce((SELECT value FROM instance_settings WHERE key = 'timezone'), 'Europe/Paris') AS t
+)
+UPDATE schedule s SET
+  enabled = $1::boolean,
+  days = $2::int[],
+  at_time = $3::time,
+  -- Un créneau déjà passé aujourd'hui n'est pas rattrapé : on n'enregistre pas une collecte immédiate par surprise.
+  last_fired_on = CASE WHEN local.t::time >= $3::time THEN local.t::date ELSE NULL END,
+  updated_at = now()
+FROM local
+WHERE s.id = 1 AND $4::boolean
+RETURNING s.id
+""", "={{ [ $json.actif, $json.jours, $json.heure, $json.valide ] }}", (440, 1240), alwaysOutputData=True)
+    redirect("Revenir à la page",
+             "=/webhook/veille?statut={{ $('Vérifier la planification').first().json.retour }}"
+             "&msg={{ $json.id ? 'planning_ok' : 'planning_invalide' }}#planification",
+             (660, 1240))
+    wf.chain("Planification", "Vérifier la planification", "Enregistrer la planification", "Revenir à la page")
+
     # Envoyer le récapitulatif par e-mail
     wf.add("Envoyer le récap", "n8n-nodes-base.webhook", 2, {"httpMethod": "POST", "path": "veille/recap", **hook},
            (0, 960), webhookId="3f5d2d0e-1c4b-4c55-9d3e-7a1f0b7e0005", credentials=CRED["ui"])
@@ -641,7 +677,7 @@ RETURNING id, status
     for title, y, height, color in (
         ("Afficher la page", -140, 340, 4), ("Valider ou remettre en file", 210, 270, 5),
         ("Lancer une collecte", 440, 200, 6), ("Ouvrir un PDF", 650, 290, 3),
-        ("Demander un e-mail", 880, 280, 4),
+        ("Demander un e-mail", 880, 280, 4), ("Régler la collecte automatique", 1180, 200, 5),
     ):
         wf.note(f"## {title}", (-60, y), 1380, height, color)
     return wf
@@ -716,6 +752,44 @@ SELECT
     return wf
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# 7 · Planificateur
+# ═════════════════════════════════════════════════════════════════════════════
+def wf_planning():
+    # Sans workflow d'erreur : s'il se déclenchait chaque minute (base arrêtée…), il inonderait les e-mails d'alerte.
+    wf = Workflow(WF_PLANNING, "Lance la collecte aux jours et à l'heure enregistrés dans l'interface (table schedule).",
+                  error_workflow=False)
+    wf.settings["saveDataSuccessExecution"] = "none"  # une exécution par minute : on ne garde que les échecs
+    wf.note("## 7 · Planificateur\nLe déclencheur de n8n ne peut pas lire l'heure choisie dans l'interface : ce workflow "
+            "se réveille **chaque minute**, lit la table `schedule` et lance la collecte quand le jour et l'heure sont "
+            "atteints, au plus **une fois par jour** (`last_fired_on`).\n\n"
+            "Jours, heure et activation se règlent dans l'interface (« Collecte automatique »). Les heures sont dans le "
+            "fuseau `TZ` de `.env`. Si n8n était arrêté à l'heure prévue, la collecte part dès son retour, le même jour.",
+            (-60, -300), 620, 250)
+    wf.add("Chaque minute", "n8n-nodes-base.scheduleTrigger", 1.2, {
+        "rule": {"interval": [{"field": "minutes", "minutesInterval": 1}]},
+    }, (0, 0))
+    # La mise à jour est le verrou : elle ne touche une ligne que si le jour et l'heure sont atteints et pas encore
+    # lancés aujourd'hui. Sans ligne, le nœud Postgres renvoie quand même {success: true} : on teste donc l'id.
+    wf.sql("Réserver l'échéance", """
+WITH local AS (
+  SELECT now() AT TIME ZONE coalesce((SELECT value FROM instance_settings WHERE key = 'timezone'), 'Europe/Paris') AS t
+)
+UPDATE schedule s SET last_fired_on = local.t::date
+FROM local
+WHERE s.enabled
+  AND extract(isodow FROM local.t)::int = ANY (s.days)
+  AND local.t::time >= s.at_time
+  AND s.last_fired_on IS DISTINCT FROM local.t::date
+RETURNING s.id
+""", None, (220, 0))
+    wf.condition("Échéance réservée ?", "={{ !!$json.id }}", (440, 0))
+    wf.call("Lancer la collecte", WF_COLLECTE, (660, 0), wait=False)
+    wf.chain("Chaque minute", "Réserver l'échéance", "Échéance réservée ?")
+    wf.link("Échéance réservée ?", "Lancer la collecte", 0)
+    return wf
+
+
 def check_syntax(workflows):
     """Vérifie la syntaxe JavaScript de chaque nœud Code (si Node.js est installé)."""
     if not shutil.which("node"):
@@ -738,7 +812,7 @@ def check_syntax(workflows):
 
 
 if __name__ == "__main__":
-    built = [build() for build in (wf_erreurs, wf_collecte, wf_lot, wf_publication, wf_llm, wf_interface, wf_recap)]
+    built = [build() for build in (wf_erreurs, wf_collecte, wf_lot, wf_publication, wf_llm, wf_interface, wf_recap, wf_planning)]
     if not check_syntax(built):
         sys.exit(1)
     for wf in built:

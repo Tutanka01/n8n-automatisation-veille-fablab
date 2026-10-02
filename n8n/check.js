@@ -100,8 +100,21 @@ const response = (data, tokens = 3) => ({ statusCode: 200, body: JSON.stringify(
   assert.equal((await action('regenerer')).regenerate, true);
   assert.equal((await action('relancer')).regenerate, false);
 
-  const page = async (headers, items) => (await run('interface/page.js', [{ statut: 'to_review', counts: { to_review: items.length }, items }], {
-    'Lire la configuration': [{ config: { llm: { modele: 'test' } } }], 'Tableau de bord': [{ query: {}, headers }],
+  const plan = async (body, extra = {}) => (await run('interface/verifier-planification.js', [{ body, ...extra }]))[0].json;
+  const clean = async (...args) => JSON.parse(JSON.stringify(await plan(...args))); // objets d'un autre contexte vm
+  assert.deepEqual(await clean({ actif: '1', heure: '07:30', j1: '1', j4: '1', retour: 'error' }),
+    { valide: true, actif: true, jours: '{1,4}', heure: '07:30', retour: 'error' });
+  assert.equal((await plan({ actif: '1', heure: '07:30' })).valide, false); // activée sans aucun jour
+  assert.equal((await plan({ actif: '1', heure: '24:00', j1: '1' })).valide, false);
+  assert.equal((await plan({ actif: '1', heure: '', j1: '1' })).valide, false);
+  assert.equal((await plan({ actif: '1', heure: '<b>', j1: '1', j9: '1' })).valide, false);
+  assert.deepEqual(await clean({ heure: '18:05:00', j1: '1', j9: '1', retour: 'x' }),
+    { valide: true, actif: false, jours: '{1}', heure: '18:05', retour: 'to_review' }); // désactivée : jours libres
+  await assert.rejects(() => plan({ heure: '07:30', j1: '1' }, { headers: { host: 'veille.test', origin: 'https://autre.test' } }), /origine/);
+  assert.equal((await plan({ heure: '07:30', j1: '1' }, { headers: { host: 'veille.test', origin: 'null' } })).valide, true);
+
+  const page = async (headers, items, planning, msg) => (await run('interface/page.js', [{ statut: 'to_review', counts: { to_review: items.length }, items, planning }], {
+    'Lire la configuration': [{ config: { llm: { modele: 'test' } } }], 'Tableau de bord': [{ query: { msg }, headers }],
   }))[0].json.html;
   const review = { id: 7, status: 'to_review', title: '<script>alert(1)</script>', review_token: 'jeton', labs: ['TEST'], score: 8,
     fiche: { points_de_vigilance: ['À vérifier'] }, linkedin: { post: 'Ligne 1\n"Ligne 2"', hashtags: ['Veille'] },
@@ -114,6 +127,17 @@ const response = (data, tokens = 3) => ({ statusCode: 200, body: JSON.stringify(
   // Derrière le reverse proxy, l'éditeur n8n n'est pas exposé : aucun lien vers lui.
   assert(!(await page({ 'x-forwarded-host': 'veille.test' }, [review])).includes('/home/workflows'));
   assert((await page({}, [])).includes('Rien à valider'));
+  assert(!direct.includes('Collecte automatique'));
+  const planning = { actif: true, jours: [1, 4], heure: '07:30', fuseau: 'Europe/Paris', prochain: '2026-10-05' };
+  const planned = await page({}, [], planning);
+  assert(planned.includes('lundi, jeudi à 07:30') && planned.includes('prochaine : lundi 5 octobre à 07:30'));
+  assert(planned.includes('name="j1" value="1" checked') && planned.includes('name="j4" value="1" checked'));
+  assert(planned.includes('name="j2" value="1">') && planned.includes('name="heure" value="07:30"'));
+  assert(planned.includes('action="/webhook/veille/planification"') && !planned.includes('<details class="plan" id="planification" open'));
+  assert((await page({}, [], planning, 'planning_ok')).includes('<details class="plan" id="planification" open'));
+  const off = await page({}, [], { ...planning, actif: false, prochain: null });
+  assert(off.includes('désactivée') && !off.includes('prochaine :') && !off.includes('name="actif" value="1" checked'));
+  assert((await page({}, [], { ...planning, jours: [1, 2, 3, 4, 5, 6, 7] })).includes('tous les jours à 07:30'));
 
   for (const file of fs.readdirSync(path.join(__dirname, 'workflows'))) {
     const wf = JSON.parse(fs.readFileSync(path.join(__dirname, 'workflows', file)));

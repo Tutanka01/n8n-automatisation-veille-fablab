@@ -68,6 +68,15 @@ async function veilleDatabase() {
     await db.query(
       `INSERT INTO instance_settings (key, value) VALUES ('public_url', $1)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [required('VEILLE_PUBLIC_URL')]);
+    // Fuseau des heures de la planification (workflow « Planificateur ») : TZ de .env, s'il est valide.
+    let zone = (env.TZ || '').trim() || 'Europe/Paris';
+    if (!(await db.query('SELECT 1 FROM pg_timezone_names WHERE name = $1', [zone])).rowCount) {
+      log(`TZ=${zone} inconnu : Europe/Paris utilisé pour la planification`);
+      zone = 'Europe/Paris';
+    }
+    await db.query(
+      `INSERT INTO instance_settings (key, value) VALUES ('timezone', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [zone]);
   });
   log(`Base « veille » : schéma à jour · interface de validation : ${env.VEILLE_PUBLIC_URL}/webhook/veille`);
 }

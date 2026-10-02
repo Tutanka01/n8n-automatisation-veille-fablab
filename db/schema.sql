@@ -103,3 +103,18 @@ CREATE TABLE IF NOT EXISTS workflow_errors (
   message        text,
   details        jsonb
 );
+
+-- Planification de la collecte automatique, modifiable depuis l'interface (workflow 7 · Planificateur).
+-- Une seule ligne. days : jours ISO (1 = lundi … 7 = dimanche) ; at_time : heure locale (fuseau :
+-- instance_settings.timezone, issu de TZ dans .env). last_fired_on évite de lancer deux fois le même jour.
+-- Par défaut : chaque lundi à 7 h, comme avant ; « aujourd'hui » est marqué fait pour ne rien lancer au premier démarrage.
+CREATE TABLE IF NOT EXISTS schedule (
+  id             int         PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  enabled        boolean     NOT NULL DEFAULT true,
+  days           int[]       NOT NULL DEFAULT '{1}',
+  at_time        time        NOT NULL DEFAULT '07:00',
+  last_fired_on  date,
+  updated_at     timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT schedule_days_ck CHECK (days <@ ARRAY[1,2,3,4,5,6,7])
+);
+INSERT INTO schedule (id, last_fired_on) VALUES (1, current_date) ON CONFLICT (id) DO NOTHING;
